@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ListenBrainz Visualizer — Unofficial Local Analytics</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Unofficial Notice Strip -->
+        <div class="unofficial-banner" role="note">
+            <span class="unofficial-pill">Unofficial Community Tool</span>
+            <span class="unofficial-copy">
+                Not affiliated with or endorsed by ListenBrainz, MusicBrainz, or the MetaBrainz Foundation. Built locally because waiting for server-side stats processing took too long.
+            </span>
+        </div>
+
+        <!-- Top Navigation Header -->
+        <header class="top-nav">
+            <div class="brand">
+                <div class="brand-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M9 18V5l12-2v13"></path>
+                        <circle cx="6" cy="18" r="3"></circle>
+                        <circle cx="18" cy="16" r="3"></circle>
+                    </svg>
+                </div>
+                <div class="brand-text">
+                    <h1>ListenBrainz Visualizer</h1>
+                    <p class="user-tag">
+                        User: <strong id="active-username">Listener</strong>
+                        <span class="sep">•</span>
+                        <span id="active-folder-label" class="folder-label">Scanning...</span>
+                        <span class="sep">•</span>
+                        <span id="sync-status">Ready</span>
+                    </p>
+                </div>
+            </div>
+
+            <!-- Global Controls Bar -->
+            <div class="global-controls">
+                <div class="control-group">
+                    <label for="btn-metric-minutes">Count By</label>
+                    <div class="pill-toggle" id="metric-toggle" role="group" aria-label="Count by metric">
+                        <button class="pill-btn active" data-metric="minutes" id="btn-metric-minutes" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                            Listen Time
+                        </button>
+                        <button class="pill-btn" data-metric="plays" id="btn-metric-plays" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                            No. of Listens
+                        </button>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <label for="limit-select">Items</label>
+                    <select id="limit-select" class="dropdown-select">
+                        <option value="30" selected>Top 30 (+1)</option>
+                        <option value="10">Top 10 (+1)</option>
+                        <option value="20">Top 20 (+1)</option>
+                        <option value="50">Top 50 (+1)</option>
+                        <option value="100">Top 100 (+1)</option>
+                    </select>
+                </div>
+
+                <label class="toggle-chip" for="chk-include-flags" title="Display country flags inline next to artist names and in image exports">
+                    <input type="checkbox" id="chk-include-flags" checked>
+                    <span>Include Flags</span>
+                </label>
+
+                <button class="btn-secondary" id="btn-data-source" type="button" title="Select export folder or learn how to export your ListenBrainz data">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                    Data Source
+                </button>
+
+                <button class="btn-sync" id="btn-sync-data" type="button" title="Import new listens from active export folder">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                    Sync Data
+                </button>
+            </div>
+        </header>
+
+        <!-- Empty-State Onboarding Callout (shown only when DB has 0 listens) -->
+        <section class="onboarding-callout hidden" id="onboarding-callout">
+            <div class="onboarding-content">
+                <h2>Import Your ListenBrainz Export to Get Started</h2>
+                <p>
+                    No listening history is loaded yet. Request your personal ZIP export from
+                    <a href="https://listenbrainz.org/settings/export/" target="_blank" rel="noopener noreferrer">listenbrainz.org/settings/export/</a>,
+                    drop it into the local <code>imports/</code> folder, or upload/select it directly right here.
+                </p>
+            </div>
+            <button class="btn-primary" id="btn-open-import-onboarding" type="button">
+                Select or Upload Export
+            </button>
+        </section>
+
+        <!-- Dynamic Time Control Center -->
+        <section class="time-control-bar" id="time-control-bar">
+            <div class="time-presets-cluster">
+                <div class="time-filter-unit">
+                    <span class="filter-unit-label">Listening Year</span>
+                    <div class="pill-group" id="year-pill-group">
+                        <button class="pill-mini-btn active" data-year="all" type="button">All Time</button>
+                    </div>
+                </div>
+
+                <div class="time-filter-unit">
+                    <label class="filter-unit-label" for="month-quick-select">Month</label>
+                    <select id="month-quick-select" class="dropdown-select-compact">
+                        <option value="all">All Months</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="slider-control-module">
+                <div class="slider-meta-row">
+                    <div class="slider-title-tag">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                        <span>Time Interval</span>
+                    </div>
+                    <div class="slider-date-badges">
+                        <span class="date-badge" id="slider-start-badge">--</span>
+                        <span class="date-arrow">→</span>
+                        <span class="date-badge" id="slider-end-badge">--</span>
+                        <button class="btn-reset-slider" id="btn-reset-slider" type="button" title="Reset interval to full range">Reset</button>
+                    </div>
+                </div>
+                <div class="range-slider-track-wrap">
+                    <div class="slider-base-bar"></div>
+                    <div class="slider-active-bar" id="slider-fill-highlight"></div>
+                    <input type="range" id="slider-start-input" min="0" max="100" value="0" step="1" aria-label="Start time">
+                    <input type="range" id="slider-end-input" min="0" max="100" value="100" step="1" aria-label="End time">
+                </div>
+                <div class="slider-subtext-row">
+                    <span id="slider-min-date-label">Earliest</span>
+                    <span id="slider-active-span-label" class="slider-span-pill">Full Range</span>
+                    <span id="slider-max-date-label">Latest</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Overall Stats Banner -->
+            <section class="stats-banner" id="overall-stats-banner">
+                <div class="stat-card hero-card">
+                    <div class="stat-icon-wrapper hero-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <polyline points="12 6 12 12 16 14"></polyline>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label" id="hero-stat-label">Total Listening Time</span>
+                        <div class="stat-value-highlight">
+                            <span class="stat-number" id="stat-total-minutes">---</span>
+                            <span class="stat-unit" id="hero-stat-unit">mins</span>
+                        </div>
+                        <span class="stat-subtext" id="stat-hours-breakdown">-- hours (-- days)</span>
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-icon-wrapper">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Total Listens</span>
+                        <span class="stat-number" id="stat-total-listens">---</span>
+                        <span class="stat-subtext" id="stat-daily-avg">-- mins/day avg</span>
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-icon-wrapper">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="12" cy="7" r="4"></circle>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Unique Artists</span>
+                        <span class="stat-number" id="stat-unique-artists">---</span>
+                        <span class="stat-subtext">Distinct artists credited</span>
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-icon-wrapper">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                            <circle cx="12" cy="12" r="4"></circle>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Unique Albums</span>
+                        <span class="stat-number" id="stat-unique-albums">---</span>
+                        <span class="stat-subtext">Distinct releases</span>
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-icon-wrapper">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M9 18V5l12-2v13"></path>
+                            <circle cx="6" cy="18" r="3"></circle>
+                            <circle cx="18" cy="16" r="3"></circle>
+                        </svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Unique Tracks</span>
+                        <span class="stat-number" id="stat-unique-tracks">---</span>
+                        <span class="stat-subtext" id="stat-listen-range">--</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Export Format Picker Bar -->
+            <section class="export-formats-bar" aria-label="Export image formats">
+                <div class="formats-bar-left">
+                    <span class="formats-bar-title">Export Formats</span>
+                    <div class="format-checkbox-group" id="export-format-group">
+                        <label class="format-check"><input type="checkbox" value="webp" checked><span>WebP</span></label>
+                        <label class="format-check"><input type="checkbox" value="avif"><span>AVIF</span></label>
+                        <label class="format-check"><input type="checkbox" value="jpg"><span>JPG</span></label>
+                        <label class="format-check" id="chk-jxl-wrap"><input type="checkbox" value="jxl"><span>JXL</span></label>
+                    </div>
+                </div>
+                <div class="export-result-links" id="export-result-links"></div>
+            </section>
+
+            <!-- Navigation Tabs -->
+            <nav class="content-tabs" aria-label="Analytics Views">
+                <button class="tab-btn active" data-tab="tab-compilation" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+                    Album Compilation
+                </button>
+                <button class="tab-btn" data-tab="tab-artists" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                    Top Artists
+                </button>
+                <button class="tab-btn" data-tab="tab-albums" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="3"></circle></svg>
+                    Top Albums
+                </button>
+                <button class="tab-btn" data-tab="tab-songs" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+                    Top Songs
+                </button>
+                <button class="tab-btn" data-tab="tab-years" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                    Release Years
+                </button>
+                <button class="tab-btn" data-tab="tab-map" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                    World Map
+                </button>
+                <button class="tab-btn" data-tab="tab-habits" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                    Listening Habits
+                </button>
+            </nav>
+
+            <!-- Tab 1: Visual Album Compilation -->
+            <section class="tab-content active" id="tab-compilation">
+                <div class="section-header">
+                    <div>
+                        <h2>Visual Album Compilation</h2>
+                        <p class="section-subtitle">Tiered Bento fills complete rows (+1); click any album cover to inspect track statistics.</p>
+                    </div>
+                    <div class="section-actions">
+                        <div class="layout-toggle">
+                            <button class="btn-toggle active" id="btn-layout-tiered" type="button" title="Top albums appear larger (Tiered Bento)">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="8" rx="1"></rect><rect x="3" y="13" width="8" height="8" rx="1"></rect><rect x="13" y="13" width="8" height="8" rx="1"></rect></svg>
+                                Tiered Bento
+                            </button>
+                            <button class="btn-toggle" id="btn-layout-uniform" type="button" title="Standard uniform grid">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+                                Uniform Grid
+                            </button>
+                        </div>
+                        <button class="btn-secondary active" id="btn-toggle-captions" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7V4h16v3M9 20h6M12 4v16"></path></svg>
+                            Titles On
+                        </button>
+                        <button class="btn-primary" id="btn-download-collage" type="button" title="Generate and download album collage in all ticked formats">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                            Export Collage
+                        </button>
+                    </div>
+                </div>
+
+                <div class="collage-wrapper">
+                    <div id="collage-container" class="collage-grid tiered"></div>
+                </div>
+            </section>
+
+            <!-- Tab 2: Top Artists Leaderboard -->
+            <section class="tab-content" id="tab-artists">
+                <div class="section-header">
+                    <div>
+                        <h2>Top Artists Leaderboard</h2>
+                        <p class="section-subtitle">Click column headers to sort, or click any artist to view album &amp; track breakdown.</p>
+                    </div>
+                    <div class="search-box action-row">
+                        <input type="text" id="filter-artists-input" placeholder="Search artists or countries...">
+                        <button class="btn-primary" id="btn-export-artists" type="button" title="Export Top 50 Artists Table in ticked formats">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                            Export Table
+                        </button>
+                    </div>
+                </div>
+
+                <div class="leaderboard-container">
+                    <div class="leaderboard-table-header artist-grid-header">
+                        <span class="col-rank sortable" data-sort="rank"># <span class="sort-icon"></span></span>
+                        <span class="col-avatar">Artist</span>
+                        <span class="col-name sortable" data-sort="name">Name <span class="sort-icon"></span></span>
+                        <span class="col-country sortable" data-sort="country">Origin <span class="sort-icon"></span></span>
+                        <span class="col-stat sortable active" data-sort="minutes" id="artist-header-stat">Listen Time <span class="sort-icon">▼</span></span>
+                        <span class="col-plays sortable" data-sort="plays">Listens <span class="sort-icon"></span></span>
+                        <span class="col-share">Share</span>
+                    </div>
+                    <div id="artists-list-container" class="leaderboard-list"></div>
+                </div>
+            </section>
+
+            <!-- Tab 3: Top Albums Leaderboard -->
+            <section class="tab-content" id="tab-albums">
+                <div class="section-header">
+                    <div>
+                        <h2>Top Albums Leaderboard</h2>
+                        <p class="section-subtitle">Original release years and covers. Click any album for track breakdown.</p>
+                    </div>
+                    <div class="search-box">
+                        <input type="text" id="filter-albums-input" placeholder="Search albums, artists, or years...">
+                    </div>
+                </div>
+
+                <div class="leaderboard-container">
+                    <div class="leaderboard-table-header album-grid-header">
+                        <span class="col-rank sortable" data-sort="rank"># <span class="sort-icon"></span></span>
+                        <span class="col-cover">Cover</span>
+                        <span class="col-album-title sortable" data-sort="title">Album Title <span class="sort-icon"></span></span>
+                        <span class="col-album-artist sortable" data-sort="artist">Artist <span class="sort-icon"></span></span>
+                        <span class="col-year sortable" data-sort="year">Year <span class="sort-icon"></span></span>
+                        <span class="col-stat sortable active" data-sort="minutes" id="album-header-stat">Listen Time <span class="sort-icon">▼</span></span>
+                        <span class="col-plays sortable" data-sort="plays">Listens <span class="sort-icon"></span></span>
+                        <span class="col-hours sortable" data-sort="hours">Hours <span class="sort-icon"></span></span>
+                    </div>
+                    <div id="albums-list-container" class="leaderboard-list"></div>
+                </div>
+            </section>
+
+            <!-- Tab 4: Top Songs Leaderboard -->
+            <section class="tab-content" id="tab-songs">
+                <div class="section-header">
+                    <div>
+                        <h2>Top Songs Leaderboard</h2>
+                        <p class="section-subtitle">Individual track rankings. Click column headers to sort.</p>
+                    </div>
+                    <div class="search-box action-row">
+                        <input type="text" id="filter-songs-input" placeholder="Search songs, artists, or albums...">
+                        <button class="btn-primary" id="btn-export-songs" type="button" title="Export Top 50 Songs Table in ticked formats">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                            Export Table
+                        </button>
+                    </div>
+                </div>
+
+                <div class="leaderboard-container">
+                    <div class="leaderboard-table-header song-grid-header">
+                        <span class="col-rank sortable" data-sort="rank"># <span class="sort-icon"></span></span>
+                        <span class="col-avatar">Cover</span>
+                        <span class="col-song-info sortable" data-sort="title">Track &amp; Artist <span class="sort-icon"></span></span>
+                        <span class="col-duration sortable" data-sort="duration">Length <span class="sort-icon"></span></span>
+                        <span class="col-stat sortable active" data-sort="minutes" id="song-header-stat">Listen Time <span class="sort-icon">▼</span></span>
+                        <span class="col-plays sortable" data-sort="plays">Listens <span class="sort-icon"></span></span>
+                    </div>
+                    <div id="songs-list-container" class="leaderboard-list"></div>
+                </div>
+            </section>
+
+            <!-- Tab 5: Release Years Visualization (Unbinned Individual Years) -->
+            <section class="tab-content" id="tab-years">
+                <div class="section-header">
+                    <div>
+                        <h2>Listening by Individual Release Year</h2>
+                        <p class="section-subtitle">Unbinned year-by-year distribution using original album release years. Tap or hover any year to inspect top albums.</p>
+                    </div>
+                    <div class="section-actions">
+                        <div class="layout-toggle" role="group" aria-label="Release year display mode">
+                            <button class="btn-toggle active" id="btn-years-active-only" type="button" title="Show only years with listening activity (unbinned)">Active Years</button>
+                            <button class="btn-toggle" id="btn-years-continuous" type="button" title="Show every calendar year continuously (unbinned)">Full Timeline</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Summary KPI Strip -->
+                <div class="years-summary-strip" id="years-summary-strip">
+                    <div class="mini-kpi">
+                        <span class="mini-kpi-label">Peak Year</span>
+                        <span class="mini-kpi-value" id="yr-kpi-peak">--</span>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-kpi-label">Weighted Avg Year</span>
+                        <span class="mini-kpi-value" id="yr-kpi-mean">--</span>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-kpi-label">Release Span</span>
+                        <span class="mini-kpi-value" id="yr-kpi-span">--</span>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-kpi-label">Active Years</span>
+                        <span class="mini-kpi-value" id="yr-kpi-count">--</span>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-kpi-label">Year Metadata Coverage</span>
+                        <span class="mini-kpi-value" id="yr-kpi-coverage">--</span>
+                    </div>
+                </div>
+
+                <div class="years-visualization-card">
+                    <div class="timeline-legend">
+                        <span class="legend-item"><span class="legend-dot dot-60s"></span> 1960s &amp; earlier</span>
+                        <span class="legend-item"><span class="legend-dot dot-70s"></span> 1970s</span>
+                        <span class="legend-item"><span class="legend-dot dot-80s"></span> 1980s</span>
+                        <span class="legend-item"><span class="legend-dot dot-90s"></span> 1990s</span>
+                        <span class="legend-item"><span class="legend-dot dot-00s"></span> 2000s</span>
+                        <span class="legend-item"><span class="legend-dot dot-10s"></span> 2010s</span>
+                        <span class="legend-item"><span class="legend-dot dot-20s"></span> 2020s</span>
+                    </div>
+
+                    <div class="years-chart-container" id="years-chart-container"></div>
+
+                    <!-- Selected Year Spotlight -->
+                    <div class="year-spotlight" id="year-spotlight"></div>
+                </div>
+
+                <!-- Unbinned Individual Year Table -->
+                <div class="years-table-card">
+                    <div class="card-header">
+                        <h3>Year-by-Year Ledger (Unbinned)</h3>
+                        <span class="card-tag" id="years-table-tag">Sorted by Year</span>
+                    </div>
+                    <div class="responsive-table-wrap">
+                        <table class="data-table" id="years-ledger-table">
+                            <thead>
+                                <tr>
+                                    <th>Year</th>
+                                    <th class="text-right">Listen Time</th>
+                                    <th class="text-right">Listens</th>
+                                    <th class="text-right">Share</th>
+                                    <th class="text-right">Albums</th>
+                                    <th>Top Releases</th>
+                                </tr>
+                            </thead>
+                            <tbody id="years-ledger-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Tab 6: World Map of Listens -->
+            <section class="tab-content" id="tab-map">
+                <div class="section-header">
+                    <div>
+                        <h2>World Map of Listening Origins</h2>
+                        <p class="section-subtitle">Choropleth intensity by artist origin. Hover or tap any highlighted country for detailed statistics and top artists.</p>
+                    </div>
+                    <div class="section-actions wrap-actions">
+                        <div class="layout-toggle" role="group" aria-label="Map color dimension">
+                            <button class="btn-toggle active" id="btn-map-mode-metric" type="button">By Active Metric</button>
+                            <button class="btn-toggle" id="btn-map-mode-artists" type="button">By Artist Count</button>
+                        </div>
+                        <div class="control-group compact">
+                            <label for="country-top-x-select">Top Countries</label>
+                            <select id="country-top-x-select" class="dropdown-select-compact">
+                                <option value="3">Top 3</option>
+                                <option value="5" selected>Top 5</option>
+                                <option value="10">Top 10</option>
+                                <option value="15">Top 15</option>
+                                <option value="25">Top 25</option>
+                                <option value="999">All</option>
+                            </select>
+                        </div>
+                        <label class="toggle-chip" for="chk-country-pie">
+                            <input type="checkbox" id="chk-country-pie">
+                            <span>Country Pie Chart</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="map-main-stack">
+                    <div class="map-container-card">
+                        <div id="world-map-svg-container" class="svg-map-wrapper"></div>
+                        <div id="map-legend-overlay" class="map-legend-overlay"></div>
+                    </div>
+
+                    <div class="country-insights-grid" id="country-insights-grid">
+                        <!-- Top X Countries Statistics Table -->
+                        <div class="country-table-card">
+                            <div class="card-header">
+                                <h3 id="country-table-heading">Top 5 Countries</h3>
+                                <span class="card-tag" id="country-metric-tag">Listen Time</span>
+                            </div>
+                            <div class="responsive-table-wrap">
+                                <table class="data-table" id="country-stats-table">
+                                    <thead>
+                                        <tr>
+                                            <th>#</th>
+                                            <th>Country</th>
+                                            <th class="text-right">Listen Time</th>
+                                            <th class="text-right">Listens</th>
+                                            <th class="text-right">Artists</th>
+                                            <th class="text-right">Share</th>
+                                            <th>Leading Artist</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="country-table-tbody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Optional Country Pie Chart Card -->
+                        <div class="country-pie-card hidden" id="country-pie-card">
+                            <div class="card-header">
+                                <h3 id="country-pie-heading">Country Share Breakdown</h3>
+                                <span class="card-tag" id="country-pie-tag">Share %</span>
+                            </div>
+                            <div class="pie-layout" id="country-pie-container"></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Tab 7: Listening Habits & Analytics -->
+            <section class="tab-content" id="tab-habits">
+                <div class="section-header">
+                    <div>
+                        <h2>Listening Habits &amp; Temporal Analytics</h2>
+                        <p class="section-subtitle">Circadian rhythm, weekday distribution, and monthly progression across the active timeframe.</p>
+                    </div>
+                </div>
+
+                <div class="analytics-grid">
+                    <div class="chart-card">
+                        <div class="card-header">
+                            <h3>Hour of Day (24h Clock)</h3>
+                            <span class="card-tag">Circadian Pattern</span>
+                        </div>
+                        <div class="chart-content">
+                            <div class="bar-chart-horizontal" id="hourly-bars"></div>
+                        </div>
+                    </div>
+
+                    <div class="chart-card">
+                        <div class="card-header">
+                            <h3>Day of Week</h3>
+                            <span class="card-tag">Weekly Rhythm</span>
+                        </div>
+                        <div class="chart-content">
+                            <div class="bar-chart-vertical" id="dow-bars"></div>
+                        </div>
+                    </div>
+
+                    <div class="chart-card full-width">
+                        <div class="card-header">
+                            <h3>Monthly Listening Progression</h3>
+                            <span class="card-tag" id="monthly-metric-tag">Listen Time</span>
+                        </div>
+                        <div class="chart-content">
+                            <div class="timeline-bars" id="monthly-bars"></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer class="app-footer">
+            <p>
+                <strong>Unofficial ListenBrainz Visualizer</strong> — independent local tool, not endorsed by or affiliated with ListenBrainz / MusicBrainz.
+                Data stays 100% on your machine in SQLite.
+            </p>
+        </footer>
+    </div>
+
+    <!-- Interactive Floating Tooltip -->
+    <div class="floating-tooltip" id="map-tooltip" role="tooltip"></div>
+
+    <!-- Interactive Drilldown Modal -->
+    <div class="modal-backdrop" id="drilldown-modal">
+        <div class="modal-card">
+            <button class="modal-close-btn" id="modal-close-btn" type="button" aria-label="Close dialog">&times;</button>
+            <div class="modal-header" id="modal-header"></div>
+            <div class="modal-nav" id="modal-nav"></div>
+            <div class="modal-body" id="modal-body"></div>
+        </div>
+    </div>
+
+    <!-- Data Source & Export Guide Modal -->
+    <div class="modal-backdrop" id="data-source-modal">
+        <div class="modal-card modal-card-wide">
+            <button class="modal-close-btn" id="data-modal-close-btn" type="button" aria-label="Close data source dialog">&times;</button>
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <div class="modal-title">ListenBrainz Data Source &amp; Export Guide</div>
+                    <div class="modal-subtitle">
+                        Choose an export folder, drop files into <code>imports/</code>, or upload your ListenBrainz archive directly.
+                    </div>
+                </div>
+            </div>
+            <div class="modal-body data-modal-body">
+                <div class="import-guide-box">
+                    <h3>How to Export Your Listens from ListenBrainz</h3>
+                    <ol>
+                        <li>Open <a href="https://listenbrainz.org/settings/export/" target="_blank" rel="noopener noreferrer">listenbrainz.org/settings/export/</a> while signed in.</li>
+                        <li>Click <strong>Export listens</strong> under the listens section and download your <code>listenbrainz_&lt;username&gt;_&lt;id&gt;.zip</code> archive.</li>
+                        <li>Drop that <code>.zip</code> (or extracted folder) into this project's <code>imports/</code> directory, or upload/select it below.</li>
+                    </ol>
+                </div>
+
+                <div class="import-section">
+                    <h3>Detected Export Folders &amp; Archives</h3>
+                    <div id="discovered-sources-list" class="discovered-sources-list"></div>
+                </div>
+
+                <div class="import-section import-two-col">
+                    <div class="import-box">
+                        <h3>Upload ListenBrainz Archive (.zip / .tar.gz)</h3>
+                        <p class="import-hint">Extracts safely into <code>imports/</code> and syncs immediately.</p>
+                        <label class="upload-dropzone" id="upload-dropzone" for="export-file-input">
+                            <input type="file" id="export-file-input" accept=".zip,.tar.gz,.tgz">
+                            <span id="upload-dropzone-text">Click to choose or drop a ListenBrainz .zip / .tar.gz file</span>
+                        </label>
+                    </div>
+
+                    <div class="import-box">
+                        <h3>Select Custom Folder Path</h3>
+                        <p class="import-hint">Enter the path to any extracted ListenBrainz export folder on your computer.</p>
+                        <div class="custom-path-row">
+                            <input type="text" id="custom-data-dir-input" placeholder="/path/to/listenbrainz_YourName_...">
+                            <button class="btn-primary" id="btn-apply-custom-path" type="button">Load &amp; Sync</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="import-feedback hidden" id="data-source-feedback"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/app.js"></script>
+</body>
+</html>

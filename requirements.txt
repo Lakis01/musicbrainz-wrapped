@@ -1,0 +1,3 @@
+Pillow>=10.0.0
+# Optional: renders crisp vector SVG flags inside exported collage/table images (falls back to Pillow badge if omitted)
+PyMuPDF>=1.24.0
