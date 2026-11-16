@@ -1051,7 +1051,7 @@ body {
 
 .collage-grid.uniform {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(var(--uniform-cols, 5), 1fr);
     gap: 8px;
 }
 
@@ -1160,6 +1160,262 @@ body {
 }
 
 .tier-hero .album-stat-text { font-size: 12px; }
+
+/* =========================================================================
+   WRAPPED PODIUM & PROPORTIONAL VISUAL BARS (TOP ARTISTS & TOP SONGS)
+   ========================================================================= */
+.wrapped-podium {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    margin-bottom: 18px;
+}
+
+.podium-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 10px;
+    position: relative;
+    cursor: pointer;
+    box-shadow: var(--shadow-sm);
+    transition: transform 0.18s ease, border-color 0.18s ease, background-color 0.18s ease;
+}
+
+.podium-card:hover {
+    transform: translateY(-2px);
+    background: var(--bg-card-hover);
+    border-color: var(--border-strong);
+}
+
+.podium-card.podium-1 { border-color: rgba(245, 158, 11, 0.45); }
+.podium-card.podium-2 { border-color: rgba(203, 213, 225, 0.35); }
+.podium-card.podium-3 { border-color: rgba(217, 119, 6, 0.42); }
+
+.podium-rank-badge {
+    position: absolute;
+    top: 14px;
+    left: 14px;
+    font-family: var(--font-display);
+    font-size: 13px;
+    font-weight: 800;
+    padding: 3px 9px;
+    border-radius: 6px;
+    background: #1e293b;
+    color: #f8fafc;
+}
+
+.podium-1 .podium-rank-badge { background: #f59e0b; color: #090d16; }
+.podium-2 .podium-rank-badge { background: #cbd5e1; color: #090d16; }
+.podium-3 .podium-rank-badge { background: #d97706; color: #ffffff; }
+
+.podium-media {
+    width: 84px;
+    height: 84px;
+    overflow: hidden;
+    background: #1e293b;
+    border: 2px solid var(--border-strong);
+    box-shadow: var(--shadow-sm);
+    flex-shrink: 0;
+}
+
+.podium-media.round { border-radius: 50%; }
+.podium-media.square { border-radius: var(--radius-md); }
+
+.podium-media img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.podium-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    max-width: 100%;
+    font-family: var(--font-display);
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text-main);
+}
+
+.podium-title-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.podium-subtitle-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    max-width: 100%;
+}
+
+.podium-metric-val {
+    font-family: var(--font-display);
+    font-size: 22px;
+    font-weight: 800;
+    color: var(--accent-cyan);
+    font-variant-numeric: tabular-nums;
+}
+
+.podium-1 .podium-metric-val { color: #fbbf24; }
+
+.podium-metric-sub {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.podium-bar-track {
+    width: 100%;
+    height: 10px;
+    background: var(--bg-inset);
+    border-radius: var(--radius-full);
+    overflow: hidden;
+    margin-top: 2px;
+}
+
+.podium-bar-fill {
+    height: 100%;
+    border-radius: var(--radius-full);
+    background: linear-gradient(90deg, #2563eb, #38bdf8);
+    transition: width 0.35s ease;
+}
+
+.podium-1 .podium-bar-fill { background: linear-gradient(90deg, #d97706, #fbbf24); }
+.podium-2 .podium-bar-fill { background: linear-gradient(90deg, #64748b, #e2e8f0); }
+.podium-3 .podium-bar-fill { background: linear-gradient(90deg, #9a3412, #fb923c); }
+
+.wrapped-list-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: 14px;
+    box-shadow: var(--shadow-sm);
+}
+
+.wrapped-sort-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 4px 6px 12px 6px;
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: 8px;
+}
+
+.sort-bar-label {
+    font-size: 11.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-right: 4px;
+}
+
+.sort-chip {
+    background: var(--bg-inset);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+    font-family: var(--font-body);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.sort-chip:hover {
+    border-color: var(--border-strong);
+    color: #ffffff;
+}
+
+.sort-chip.active, .sort-chip.sortable.active {
+    background: var(--primary-strong);
+    border-color: rgba(147, 197, 253, 0.35);
+    color: #ffffff;
+}
+
+.wrapped-bars-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.wrapped-bar-row {
+    display: grid;
+    grid-template-columns: 44px 46px minmax(180px, 1.15fr) minmax(160px, 1.25fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background-color 0.16s ease, border-color 0.16s ease;
+}
+
+.wrapped-bar-row:hover {
+    background: var(--bg-card-hover);
+    border-color: rgba(96, 165, 250, 0.28);
+}
+
+.wrapped-visual-bar-wrap {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.wrapped-visual-track {
+    flex: 1;
+    height: 14px;
+    background: var(--bg-inset);
+    border-radius: var(--radius-full);
+    overflow: hidden;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.wrapped-visual-fill {
+    height: 100%;
+    border-radius: var(--radius-full);
+    background: linear-gradient(90deg, #1d4ed8, #38bdf8);
+    transition: width 0.35s ease;
+}
+
+.wrapped-visual-fill.song-fill {
+    background: linear-gradient(90deg, #4f46e5, #38bdf8);
+}
+
+.wrapped-visual-pct {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--text-muted);
+    width: 36px;
+    text-align: right;
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+}
+
+.wrapped-stat-right {
+    text-align: right;
+    min-width: 115px;
+}
 
 /* =========================================================================
    LEADERBOARDS & SORTABLE TABLES
@@ -2481,6 +2737,23 @@ body {
         flex: 1;
         min-width: 0;
     }
+
+    .wrapped-podium {
+        grid-template-columns: 1fr;
+    }
+    .wrapped-bar-row {
+        grid-template-columns: 36px 42px minmax(0, 1fr) auto;
+        grid-template-areas:
+            "rank media main stat"
+            "bar bar bar bar";
+        gap: 6px 10px;
+    }
+    .wrapped-bar-row .row-rank { grid-area: rank; }
+    .wrapped-bar-row .artist-avatar-wrapper,
+    .wrapped-bar-row .album-cover-thumb { grid-area: media; }
+    .wrapped-bar-row .row-main-cell { grid-area: main; }
+    .wrapped-bar-row .wrapped-stat-right { grid-area: stat; min-width: 0; }
+    .wrapped-bar-row .wrapped-visual-bar-wrap { grid-area: bar; }
 
     /* Clean Mobile Card-Style Leaderboard Rows (prevents horizontal clipping) */
     .leaderboard-table-header {

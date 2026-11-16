@@ -16,6 +16,7 @@ from collage_generator import (
     generate_songs_table_image,
     generate_tiered_collage,
     generate_uniform_collage,
+    get_uniform_grid_dims,
     normalize_formats,
 )
 from db import (
@@ -264,8 +265,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                         formats=fmt_list,
                     )
                 else:
-                    cols = 5
-                    rows = (limit + cols - 1) // cols
+                    cols, rows = get_uniform_grid_dims(limit)
                     saved_paths = generate_uniform_collage(
                         grid_size=(cols, rows),
                         metric=metric,
@@ -350,7 +350,7 @@ def run(port: int = PORT) -> None:
     http.server.ThreadingHTTPServer.allow_reuse_address = True
     httpd = http.server.ThreadingHTTPServer(("", port), CustomHandler)
     httpd.daemon_threads = True
-    print(f"Unofficial ListenBrainz Visualizer running at http://localhost:{port}")
+    print(f"Unofficial MusicBrainz Wrapped running at http://localhost:{port}")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

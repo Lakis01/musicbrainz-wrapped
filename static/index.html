@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ListenBrainz Visualizer — Unofficial Local Analytics</title>
+    <title>MusicBrainz Wrapped — Unofficial Local Listening Analytics</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -15,7 +15,7 @@
         <div class="unofficial-banner" role="note">
             <span class="unofficial-pill">Unofficial Community Tool</span>
             <span class="unofficial-copy">
-                Not affiliated with or endorsed by ListenBrainz, MusicBrainz, or the MetaBrainz Foundation. Built locally because waiting for server-side stats processing took too long.
+                Not affiliated with or endorsed by MusicBrainz, ListenBrainz, or the MetaBrainz Foundation.
             </span>
         </div>
 
@@ -30,7 +30,7 @@
                     </svg>
                 </div>
                 <div class="brand-text">
-                    <h1>ListenBrainz Visualizer</h1>
+                    <h1>MusicBrainz Wrapped</h1>
                     <p class="user-tag">
                         User: <strong id="active-username">Listener</strong>
                         <span class="sep">•</span>
@@ -60,11 +60,14 @@
                 <div class="control-group">
                     <label for="limit-select">Items</label>
                     <select id="limit-select" class="dropdown-select">
-                        <option value="30" selected>Top 30 (+1)</option>
-                        <option value="10">Top 10 (+1)</option>
-                        <option value="20">Top 20 (+1)</option>
-                        <option value="50">Top 50 (+1)</option>
-                        <option value="100">Top 100 (+1)</option>
+                        <option value="11">Top 11 (Gapless)</option>
+                        <option value="16">Top 16 (Gapless)</option>
+                        <option value="21">Top 21 (Gapless)</option>
+                        <option value="31" selected>Top 31 (Gapless)</option>
+                        <option value="41">Top 41 (Gapless)</option>
+                        <option value="51">Top 51 (Gapless)</option>
+                        <option value="76">Top 76 (Gapless)</option>
+                        <option value="101">Top 101 (Gapless)</option>
                     </select>
                 </div>
 
@@ -303,33 +306,34 @@
                 </div>
             </section>
 
-            <!-- Tab 2: Top Artists Leaderboard -->
+            <!-- Tab 2: Top Artists (Wrapped Podium & Visual Metric Bars) -->
             <section class="tab-content" id="tab-artists">
                 <div class="section-header">
                     <div>
-                        <h2>Top Artists Leaderboard</h2>
-                        <p class="section-subtitle">Click column headers to sort, or click any artist to view album &amp; track breakdown.</p>
+                        <h2>Top Artists Wrapped</h2>
+                        <p class="section-subtitle">Ranked by your selected metric with proportional visual bars. Click any artist for album &amp; track drilldown.</p>
                     </div>
                     <div class="search-box action-row">
                         <input type="text" id="filter-artists-input" placeholder="Search artists or countries...">
-                        <button class="btn-primary" id="btn-export-artists" type="button" title="Export Top 50 Artists Table in ticked formats">
+                        <button class="btn-primary" id="btn-export-artists" type="button" title="Export Top 50 Artists Graphic in ticked formats">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                            Export Table
+                            Export Graphic
                         </button>
                     </div>
                 </div>
 
-                <div class="leaderboard-container">
-                    <div class="leaderboard-table-header artist-grid-header">
-                        <span class="col-rank sortable" data-sort="rank"># <span class="sort-icon"></span></span>
-                        <span class="col-avatar">Artist</span>
-                        <span class="col-name sortable" data-sort="name">Name <span class="sort-icon"></span></span>
-                        <span class="col-country sortable" data-sort="country">Origin <span class="sort-icon"></span></span>
-                        <span class="col-stat sortable active" data-sort="minutes" id="artist-header-stat">Listen Time <span class="sort-icon">▼</span></span>
-                        <span class="col-plays sortable" data-sort="plays">Listens <span class="sort-icon"></span></span>
-                        <span class="col-share">Share</span>
+                <div id="artists-podium" class="wrapped-podium"></div>
+
+                <div class="wrapped-list-card">
+                    <div class="wrapped-sort-bar">
+                        <span class="sort-bar-label">Sort by:</span>
+                        <button class="sort-chip sortable" data-sort="rank" type="button"># Rank <span class="sort-icon"></span></button>
+                        <button class="sort-chip sortable active" data-sort="minutes" id="artist-header-stat" type="button">Listen Time <span class="sort-icon">▼</span></button>
+                        <button class="sort-chip sortable" data-sort="plays" type="button">Listens <span class="sort-icon"></span></button>
+                        <button class="sort-chip sortable" data-sort="name" type="button">Name <span class="sort-icon"></span></button>
+                        <button class="sort-chip sortable" data-sort="country" type="button">Country <span class="sort-icon"></span></button>
                     </div>
-                    <div id="artists-list-container" class="leaderboard-list"></div>
+                    <div id="artists-list-container" class="wrapped-bars-list"></div>
                 </div>
             </section>
 
@@ -360,32 +364,34 @@
                 </div>
             </section>
 
-            <!-- Tab 4: Top Songs Leaderboard -->
+            <!-- Tab 4: Top Songs (Wrapped Podium & Visual Metric Bars) -->
             <section class="tab-content" id="tab-songs">
                 <div class="section-header">
                     <div>
-                        <h2>Top Songs Leaderboard</h2>
-                        <p class="section-subtitle">Individual track rankings. Click column headers to sort.</p>
+                        <h2>Top Songs Wrapped</h2>
+                        <p class="section-subtitle">Track rankings with proportional metric bars and track length × plays breakdown. Click any track to open its album.</p>
                     </div>
                     <div class="search-box action-row">
                         <input type="text" id="filter-songs-input" placeholder="Search songs, artists, or albums...">
-                        <button class="btn-primary" id="btn-export-songs" type="button" title="Export Top 50 Songs Table in ticked formats">
+                        <button class="btn-primary" id="btn-export-songs" type="button" title="Export Top 50 Songs Graphic in ticked formats">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                            Export Table
+                            Export Graphic
                         </button>
                     </div>
                 </div>
 
-                <div class="leaderboard-container">
-                    <div class="leaderboard-table-header song-grid-header">
-                        <span class="col-rank sortable" data-sort="rank"># <span class="sort-icon"></span></span>
-                        <span class="col-avatar">Cover</span>
-                        <span class="col-song-info sortable" data-sort="title">Track &amp; Artist <span class="sort-icon"></span></span>
-                        <span class="col-duration sortable" data-sort="duration">Length <span class="sort-icon"></span></span>
-                        <span class="col-stat sortable active" data-sort="minutes" id="song-header-stat">Listen Time <span class="sort-icon">▼</span></span>
-                        <span class="col-plays sortable" data-sort="plays">Listens <span class="sort-icon"></span></span>
+                <div id="songs-podium" class="wrapped-podium"></div>
+
+                <div class="wrapped-list-card">
+                    <div class="wrapped-sort-bar">
+                        <span class="sort-bar-label">Sort by:</span>
+                        <button class="sort-chip sortable" data-sort="rank" type="button"># Rank <span class="sort-icon"></span></button>
+                        <button class="sort-chip sortable active" data-sort="minutes" id="song-header-stat" type="button">Listen Time <span class="sort-icon">▼</span></button>
+                        <button class="sort-chip sortable" data-sort="plays" type="button">Listens <span class="sort-icon"></span></button>
+                        <button class="sort-chip sortable" data-sort="duration" type="button">Track Length <span class="sort-icon"></span></button>
+                        <button class="sort-chip sortable" data-sort="title" type="button">Title <span class="sort-icon"></span></button>
                     </div>
-                    <div id="songs-list-container" class="leaderboard-list"></div>
+                    <div id="songs-list-container" class="wrapped-bars-list"></div>
                 </div>
             </section>
 
@@ -587,7 +593,7 @@
 
         <footer class="app-footer">
             <p>
-                <strong>Unofficial ListenBrainz Visualizer</strong> — independent local tool, not endorsed by or affiliated with ListenBrainz / MusicBrainz.
+                <strong>MusicBrainz Wrapped (Unofficial)</strong> — independent local community tool, not endorsed by or affiliated with MusicBrainz, ListenBrainz, or the MetaBrainz Foundation.
                 Data stays 100% on your machine in SQLite.
             </p>
         </footer>

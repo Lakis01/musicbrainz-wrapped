@@ -14,6 +14,7 @@ from collage_generator import (
     generate_songs_table_image,
     generate_tiered_collage,
     generate_uniform_collage,
+    get_uniform_grid_dims,
     normalize_formats,
 )
 from db import get_overall_stats, get_top_albums, get_top_artists, get_top_tracks
@@ -58,7 +59,7 @@ def update_manual_estimate(acid_arab_mins=None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Unofficial ListenBrainz History Visualizer & Analytics (not endorsed by ListenBrainz/MusicBrainz)"
+        description="MusicBrainz Wrapped — Unofficial Local Listening History Visualizer (not endorsed by MusicBrainz/ListenBrainz)"
     )
     parser.add_argument("--data-dir", type=str, default=None, help="Path to ListenBrainz export folder or .zip/.tar.gz archive")
     parser.add_argument("--sync", action="store_true", help="Sync latest ListenBrainz export and apply canonicalization")
@@ -99,7 +100,7 @@ def main():
 
     stats = get_overall_stats(timeframe=args.timeframe)
     print("=" * 64)
-    print("   UNOFFICIAL LISTENBRAINZ LISTENING HISTORY SUMMARY")
+    print("        MUSICBRAINZ WRAPPED — LISTENING SUMMARY (UNOFFICIAL)")
     print("=" * 64)
     print(f"Total Listening Time:  {stats['total_minutes']:,} minutes ({stats['total_hours']} hours / {stats['total_days']} days)")
     print(f"Total Scrobbles:       {stats['total_listens']:,} plays")
@@ -164,8 +165,9 @@ def main():
                 limit=args.limit, metric=args.metric, timeframe=args.timeframe, output_path=stem, show_flags=args.show_flags, formats=fmt_list
             )
         else:
+            cols, rows = get_uniform_grid_dims(args.limit)
             out = generate_uniform_collage(
-                grid_size=(5, (args.limit + 4) // 5),
+                grid_size=(cols, rows),
                 metric=args.metric,
                 timeframe=args.timeframe,
                 output_path=stem,

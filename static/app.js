@@ -6,7 +6,7 @@ document.addEventListener("DOMContentLoaded", () => {
         end_ts: null,
         min_ts: null,
         max_ts: null,
-        limit: 30,
+        limit: 31,
         layout: "tiered",
         showCaptions: true,
         showFlags: true,
@@ -70,8 +70,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnResetSlider = document.getElementById("btn-reset-slider");
 
     const collageContainer = document.getElementById("collage-container");
+    const artistsPodium = document.getElementById("artists-podium");
     const artistsContainer = document.getElementById("artists-list-container");
     const albumsContainer = document.getElementById("albums-list-container");
+    const songsPodium = document.getElementById("songs-podium");
     const songsContainer = document.getElementById("songs-list-container");
     const yearsContainer = document.getElementById("years-chart-container");
     const yearSpotlight = document.getElementById("year-spotlight");
@@ -228,23 +230,50 @@ document.addEventListener("DOMContentLoaded", () => {
         mapTooltip.style.top = `${y}px`;
     }
 
+    const TIERED_PRESETS = [
+        { v: 11, label: "Top 11 (Gapless)" },
+        { v: 16, label: "Top 16 (Gapless)" },
+        { v: 21, label: "Top 21 (Gapless)" },
+        { v: 31, label: "Top 31 (Gapless)" },
+        { v: 41, label: "Top 41 (Gapless)" },
+        { v: 51, label: "Top 51 (Gapless)" },
+        { v: 76, label: "Top 76 (Gapless)" },
+        { v: 101, label: "Top 101 (Gapless)" },
+    ];
+
+    const UNIFORM_PRESETS = [
+        { v: 9, label: "Top 9 (3×3)", cols: 3 },
+        { v: 16, label: "Top 16 (4×4)", cols: 4 },
+        { v: 20, label: "Top 20 (5×4)", cols: 5 },
+        { v: 25, label: "Top 25 (5×5)", cols: 5 },
+        { v: 30, label: "Top 30 (5×6)", cols: 5 },
+        { v: 50, label: "Top 50 (5×10)", cols: 5 },
+        { v: 100, label: "Top 100 (5×20)", cols: 5 },
+    ];
+
+    function syncLimitDropdown() {
+        const presets = state.layout === "tiered" ? TIERED_PRESETS : UNIFORM_PRESETS;
+        // Snap current state.limit to nearest available preset
+        let closest = presets[0].v;
+        let minDiff = Infinity;
+        for (const p of presets) {
+            const diff = Math.abs(p.v - state.limit);
+            if (diff < minDiff) {
+                minDiff = diff;
+                closest = p.v;
+            }
+        }
+        state.limit = closest;
+        limitSelect.innerHTML = presets.map(p => `<option value="${p.v}" ${p.v === closest ? "selected" : ""}>${p.label}</option>`).join("");
+    }
+
     function calculateTieredLimit(targetLimit) {
         const t = parseInt(targetLimit, 10);
-        if (t === 10) return 11;
-        if (t === 20) return 21;
-        if (t === 30) return 31;
-        if (t === 50) return 51;
-        if (t >= 100) return 101;
-        if ([11, 21, 31, 51, 101].includes(t)) return t;
-        if (t > 11) {
-            const rem = (t - 11) % 5;
-            return rem === 0 ? t : t + (5 - rem);
-        }
-        if (t > 3) {
-            const rem = (t - 3) % 4;
-            return rem === 0 ? t : t + (4 - rem);
-        }
-        return t;
+        if (t <= 3) return 3;
+        if (t <= 7) return 7;
+        if (t <= 11) return 11;
+        const rem = (t - 11) % 5;
+        return rem === 0 ? t : t + (5 - rem);
     }
 
     // Boot Sequence
@@ -685,7 +714,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
         limitSelect.addEventListener("change", e => {
             state.limit = parseInt(e.target.value, 10);
-            updateExportButtonText();
+            syncLimitDropdown();
+        updateExportButtonText();
             loadRankings();
         });
 
@@ -703,7 +733,9 @@ document.addEventListener("DOMContentLoaded", () => {
             state.layout = "tiered";
             btnLayoutTiered.classList.add("active");
             btnLayoutUniform.classList.remove("active");
-            updateExportButtonText();
+            syncLimitDropdown();
+            syncLimitDropdown();
+        updateExportButtonText();
             loadRankings();
         });
 
@@ -711,7 +743,9 @@ document.addEventListener("DOMContentLoaded", () => {
             state.layout = "uniform";
             btnLayoutUniform.classList.add("active");
             btnLayoutTiered.classList.remove("active");
-            updateExportButtonText();
+            syncLimitDropdown();
+            syncLimitDropdown();
+        updateExportButtonText();
             loadRankings();
         });
 
@@ -727,6 +761,7 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         });
 
+        syncLimitDropdown();
         updateExportButtonText();
 
         btnDownloadCollage.addEventListener("click", () => {
@@ -1225,7 +1260,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 collageContainer.appendChild(r3);
             }
         } else {
+            const preset = UNIFORM_PRESETS.find(p => p.v === state.limit);
+            const cols = preset ? preset.cols : 5;
             collageContainer.className = "collage-grid uniform";
+            collageContainer.style.setProperty("--uniform-cols", String(cols));
             albums.slice(0, state.limit).forEach(a => collageContainer.appendChild(createCollageItemElement(a, "uniform")));
         }
     }
@@ -1277,6 +1315,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function renderArtists() {
+        artistsPodium.innerHTML = "";
         artistsContainer.innerHTML = "";
         let list = state.topArtists.filter(a =>
             a.artist_name.toLowerCase().includes(state.artistFilter) ||
@@ -1287,21 +1326,57 @@ document.addEventListener("DOMContentLoaded", () => {
             artistsContainer.innerHTML = `<div style="padding:20px;text-align:center;color:#94a3b8;">No matching artists found.</div>`;
             return;
         }
-        const maxStat = Math.max(...state.topArtists.map(a => state.metric === "minutes" ? a.minutes_listened : a.play_count), 1);
+        const isMin = state.metric === "minutes";
+        const maxStat = Math.max(...state.topArtists.map(a => isMin ? a.minutes_listened : a.play_count), 1);
 
-        list.forEach(artist => {
-            const row = document.createElement("div");
-            row.className = "leaderboard-row artist-row";
-            const rankClass = artist.rank <= 3 ? `top-${artist.rank}` : "";
+        const podiumSlice = list.length >= 3 ? list.slice(0, 3) : [];
+        const restSlice = list.length >= 3 ? list.slice(3) : list;
+
+        podiumSlice.forEach((artist, idx) => {
+            const pos = idx + 1;
+            const cur = isMin ? artist.minutes_listened : artist.play_count;
+            const pct = Math.max(4, Math.round((cur / maxStat) * 100));
             const avatarSrc = artist.image_local_path || artist.image_url || getFallbackAvatar(artist.artist_name);
-            const statVal = state.metric === "minutes" ? `${Number(artist.minutes_listened).toLocaleString()} min` : `${artist.play_count} listens`;
-            const statSub = state.metric === "minutes" ? `${artist.hours_listened} hrs` : `${Number(artist.minutes_listened).toLocaleString()} min`;
-            const cur = state.metric === "minutes" ? artist.minutes_listened : artist.play_count;
-            const pct = Math.round((cur / maxStat) * 100);
             const flag = flagHtml(artist.country_code, artist.country_name || "");
+            const primaryTxt = isMin
+                ? `${artist.hours_listened} hrs (${Number(artist.minutes_listened).toLocaleString()}m)`
+                : `${artist.play_count.toLocaleString()} listens`;
+            const subTxt = isMin
+                ? `${artist.play_count.toLocaleString()} listens • ${pct}% of #1`
+                : `${artist.hours_listened} hrs (${Number(artist.minutes_listened).toLocaleString()}m) • ${pct}% of #1`;
+
+            const card = document.createElement("div");
+            card.className = `podium-card podium-${pos}`;
+            card.innerHTML = `
+                <div class="podium-rank-badge">#${artist.rank}</div>
+                <div class="podium-media round">
+                    <img src="${escapeHtml(avatarSrc)}" alt="${escapeHtml(artist.artist_name)}" onerror="this.src='${getFallbackAvatar(artist.artist_name)}'">
+                </div>
+                <div class="podium-title-row">
+                    <span class="podium-title-text">${escapeHtml(artist.artist_name)}</span>
+                    ${flag}
+                </div>
+                <div class="podium-subtitle-row">${escapeHtml(artist.country_name || "Unknown Origin")}</div>
+                <div class="podium-metric-val">${primaryTxt}</div>
+                <div class="podium-metric-sub">${subTxt}</div>
+                <div class="podium-bar-track"><div class="podium-bar-fill" style="width:${pct}%"></div></div>
+            `;
+            card.addEventListener("click", () => openArtistDrilldown(artist.artist_name));
+            artistsPodium.appendChild(card);
+        });
+
+        restSlice.forEach(artist => {
+            const row = document.createElement("div");
+            row.className = "wrapped-bar-row";
+            const avatarSrc = artist.image_local_path || artist.image_url || getFallbackAvatar(artist.artist_name);
+            const cur = isMin ? artist.minutes_listened : artist.play_count;
+            const pct = Math.max(2, Math.round((cur / maxStat) * 100));
+            const flag = flagHtml(artist.country_code, artist.country_name || "");
+            const statVal = isMin ? `${Number(artist.minutes_listened).toLocaleString()} min` : `${artist.play_count.toLocaleString()} listens`;
+            const statSub = isMin ? `${artist.hours_listened}h · ${artist.play_count}p` : `${Number(artist.minutes_listened).toLocaleString()} min`;
 
             row.innerHTML = `
-                <div class="row-rank ${rankClass}">#${artist.rank}</div>
+                <div class="row-rank">#${artist.rank}</div>
                 <div class="artist-avatar-wrapper">
                     <img src="${escapeHtml(avatarSrc)}" alt="${escapeHtml(artist.artist_name)}" loading="lazy" onerror="this.src='${getFallbackAvatar(artist.artist_name)}'">
                 </div>
@@ -1310,19 +1385,15 @@ document.addEventListener("DOMContentLoaded", () => {
                         <span class="truncate-name">${escapeHtml(artist.artist_name)}</span>
                         ${flag}
                     </div>
-                    <div class="item-secondary-text">${artist.play_count} listens${artist.country_name ? ` • ${escapeHtml(artist.country_name)}` : ""}</div>
+                    <div class="item-secondary-text">${escapeHtml(artist.country_name || "Unknown Origin")}</div>
                 </div>
-                <div class="row-mobile-hide">
-                    <span class="country-name-badge">${escapeHtml(artist.country_name || "Unknown")}</span>
+                <div class="wrapped-visual-bar-wrap">
+                    <div class="wrapped-visual-track"><div class="wrapped-visual-fill" style="width:${pct}%"></div></div>
+                    <span class="wrapped-visual-pct">${pct}%</span>
                 </div>
-                <div class="row-stat-cell">
+                <div class="wrapped-stat-right">
                     <div class="row-stat-val">${statVal}</div>
                     <div class="row-stat-sub">${statSub}</div>
-                </div>
-                <div class="row-plays row-mono-cell row-mobile-hide">${artist.play_count}</div>
-                <div class="share-bar-container">
-                    <div class="share-bar-bg"><div class="share-bar-fill" style="width:${pct}%"></div></div>
-                    <div class="share-bar-pct">${pct}% of top</div>
                 </div>
             `;
             row.addEventListener("click", () => openArtistDrilldown(artist.artist_name));
@@ -1383,6 +1454,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function renderSongsList() {
+        songsPodium.innerHTML = "";
         songsContainer.innerHTML = "";
         let list = state.topTracks.filter(s =>
             s.track_name.toLowerCase().includes(state.songFilter) ||
@@ -1394,17 +1466,62 @@ document.addEventListener("DOMContentLoaded", () => {
             songsContainer.innerHTML = `<div style="padding:20px;text-align:center;color:#94a3b8;">No matching songs found.</div>`;
             return;
         }
-        list.slice(0, state.limit).forEach(song => {
-            const row = document.createElement("div");
-            row.className = "leaderboard-row song-row";
-            const rankClass = song.rank <= 3 ? `top-${song.rank}` : "";
+        const isMin = state.metric === "minutes";
+        const maxStat = Math.max(...state.topTracks.map(s => isMin ? s.minutes_listened : s.play_count), 1);
+
+        const visible = list.slice(0, state.limit);
+        const podiumSlice = visible.length >= 3 ? visible.slice(0, 3) : [];
+        const restSlice = visible.length >= 3 ? visible.slice(3) : visible;
+
+        podiumSlice.forEach((song, idx) => {
+            const pos = idx + 1;
+            const cur = isMin ? song.minutes_listened : song.play_count;
+            const pct = Math.max(4, Math.round((cur / maxStat) * 100));
             const coverSrc = song.album_cover_local_path || song.artist_image_local_path || getFallbackAvatar(song.artist_name);
-            const statVal = state.metric === "minutes" ? `${Number(song.minutes_listened).toLocaleString()} min` : `${song.play_count} listens`;
-            const statSub = state.metric === "minutes" ? `${song.play_count} listens` : `${Number(song.minutes_listened).toLocaleString()} min`;
             const flag = flagHtml(song.country_code, song.country_name || "");
+            const primaryTxt = isMin ? `${Number(song.minutes_listened).toLocaleString()} mins` : `${song.play_count.toLocaleString()} listens`;
+            const subTxt = `${song.duration_formatted} × ${song.play_count} listens • ${pct}% of #1`;
+
+            const card = document.createElement("div");
+            card.className = `podium-card podium-${pos}`;
+            card.innerHTML = `
+                <div class="podium-rank-badge">#${song.rank}</div>
+                <div class="podium-media square">
+                    <img src="${escapeHtml(coverSrc)}" alt="${escapeHtml(song.track_name)}" onerror="this.src='${getFallbackAvatar(song.artist_name)}'">
+                </div>
+                <div class="podium-title-row">
+                    <span class="podium-title-text" title="${escapeHtml(song.track_name)}">${escapeHtml(song.track_name)}</span>
+                </div>
+                <div class="podium-subtitle-row">
+                    <span class="podium-title-text">${escapeHtml(song.artist_name)}</span>
+                    ${flag}
+                </div>
+                <div class="podium-metric-val">${primaryTxt}</div>
+                <div class="podium-metric-sub">${subTxt}</div>
+                <div class="podium-bar-track"><div class="podium-bar-fill" style="width:${pct}%"></div></div>
+            `;
+            card.addEventListener("click", () => {
+                if (song.release_name && song.release_name !== "Single / Unknown") {
+                    openAlbumDrilldown(song.artist_name, song.release_name);
+                } else {
+                    openArtistDrilldown(song.artist_name);
+                }
+            });
+            songsPodium.appendChild(card);
+        });
+
+        restSlice.forEach(song => {
+            const row = document.createElement("div");
+            row.className = "wrapped-bar-row";
+            const coverSrc = song.album_cover_local_path || song.artist_image_local_path || getFallbackAvatar(song.artist_name);
+            const cur = isMin ? song.minutes_listened : song.play_count;
+            const pct = Math.max(2, Math.round((cur / maxStat) * 100));
+            const flag = flagHtml(song.country_code, song.country_name || "");
+            const statVal = isMin ? `${Number(song.minutes_listened).toLocaleString()} min` : `${song.play_count.toLocaleString()} listens`;
+            const statSub = isMin ? `${song.duration_formatted} × ${song.play_count}p` : `${Number(song.minutes_listened).toLocaleString()}m (${song.duration_formatted})`;
 
             row.innerHTML = `
-                <div class="row-rank ${rankClass}">#${song.rank}</div>
+                <div class="row-rank">#${song.rank}</div>
                 <div class="album-cover-thumb">
                     <img src="${escapeHtml(coverSrc)}" alt="${escapeHtml(song.track_name)}" loading="lazy" onerror="this.src='${getFallbackAvatar(song.artist_name)}'">
                 </div>
@@ -1416,13 +1533,22 @@ document.addEventListener("DOMContentLoaded", () => {
                         <span class="tag-badge">${escapeHtml(song.release_name)}</span>
                     </div>
                 </div>
-                <div class="row-dur row-mono-cell row-mobile-hide">${escapeHtml(song.duration_formatted)}</div>
-                <div class="row-stat-cell">
+                <div class="wrapped-visual-bar-wrap">
+                    <div class="wrapped-visual-track"><div class="wrapped-visual-fill song-fill" style="width:${pct}%"></div></div>
+                    <span class="wrapped-visual-pct">${pct}%</span>
+                </div>
+                <div class="wrapped-stat-right">
                     <div class="row-stat-val">${statVal}</div>
                     <div class="row-stat-sub">${statSub}</div>
                 </div>
-                <div class="row-plays row-mono-cell row-mobile-hide">${song.play_count}</div>
             `;
+            row.addEventListener("click", () => {
+                if (song.release_name && song.release_name !== "Single / Unknown") {
+                    openAlbumDrilldown(song.artist_name, song.release_name);
+                } else {
+                    openArtistDrilldown(song.artist_name);
+                }
+            });
             songsContainer.appendChild(row);
         });
     }
