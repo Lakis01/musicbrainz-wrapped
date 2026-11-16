@@ -1378,7 +1378,7 @@ document.addEventListener("DOMContentLoaded", () => {
             row.innerHTML = `
                 <div class="row-rank">#${artist.rank}</div>
                 <div class="artist-avatar-wrapper">
-                    <img src="${escapeHtml(avatarSrc)}" alt="${escapeHtml(artist.artist_name)}" loading="lazy" onerror="this.src='${getFallbackAvatar(artist.artist_name)}'">
+                    <img src="${escapeHtml(avatarSrc)}" alt="${escapeHtml(artist.artist_name)}" onerror="this.src='${getFallbackAvatar(artist.artist_name)}'">
                 </div>
                 <div class="row-main-cell">
                     <div class="item-primary-text">
@@ -1426,7 +1426,7 @@ document.addEventListener("DOMContentLoaded", () => {
             row.innerHTML = `
                 <div class="row-rank ${rankClass}">#${album.rank}</div>
                 <div class="album-cover-thumb">
-                    <img src="${escapeHtml(coverSrc)}" alt="${escapeHtml(album.release_name)}" loading="lazy" onerror="this.src='${getFallbackAvatar(album.release_name)}'">
+                    <img src="${escapeHtml(coverSrc)}" alt="${escapeHtml(album.release_name)}" onerror="this.src='${getFallbackAvatar(album.release_name)}'">
                 </div>
                 <div class="row-main-cell">
                     <div class="item-primary-text"><span class="truncate-name">${escapeHtml(album.release_name)}</span></div>
@@ -1523,7 +1523,7 @@ document.addEventListener("DOMContentLoaded", () => {
             row.innerHTML = `
                 <div class="row-rank">#${song.rank}</div>
                 <div class="album-cover-thumb">
-                    <img src="${escapeHtml(coverSrc)}" alt="${escapeHtml(song.track_name)}" loading="lazy" onerror="this.src='${getFallbackAvatar(song.artist_name)}'">
+                    <img src="${escapeHtml(coverSrc)}" alt="${escapeHtml(song.track_name)}" onerror="this.src='${getFallbackAvatar(song.artist_name)}'">
                 </div>
                 <div class="row-main-cell">
                     <div class="item-primary-text"><span class="truncate-name">${escapeHtml(song.track_name)}</span></div>
