@@ -93,6 +93,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnDownloadCollage = document.getElementById("btn-download-collage");
     const btnExportArtists = document.getElementById("btn-export-artists");
     const btnExportSongs = document.getElementById("btn-export-songs");
+    const btnExportYears = document.getElementById("btn-export-years");
+    const btnExportMap = document.getElementById("btn-export-map");
     const exportFormatGroup = document.getElementById("export-format-group");
     const exportResultLinks = document.getElementById("export-result-links");
     const chkJxlWrap = document.getElementById("chk-jxl-wrap");
@@ -123,6 +125,15 @@ document.addEventListener("DOMContentLoaded", () => {
     const uploadDropzone = document.getElementById("upload-dropzone");
     const uploadDropzoneText = document.getElementById("upload-dropzone-text");
     const dataSourceFeedback = document.getElementById("data-source-feedback");
+    const lbTokenInput = document.getElementById("lb-token-input");
+    const btnToggleLbToken = document.getElementById("btn-toggle-lb-token");
+    const btnSaveLbToken = document.getElementById("btn-save-lb-token");
+    const btnClearLbToken = document.getElementById("btn-clear-lb-token");
+    const chkRememberLbToken = document.getElementById("chk-remember-lb-token");
+    const lbTokenStatusBadge = document.getElementById("lb-token-status-badge");
+    const btnAutoLbExport = document.getElementById("btn-auto-lb-export");
+    const lbExportProgressText = document.getElementById("lb-export-progress-text");
+    let lbPollTimer = null;
 
     const tabBtns = document.querySelectorAll(".tab-btn");
     const tabContents = document.querySelectorAll(".tab-content");
@@ -327,8 +338,27 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             }
             renderDiscoveredSources(cfg);
+            renderLbTokenStatus(cfg.listenbrainz_token);
         } catch (err) {
             console.error("Failed loading config:", err);
+        }
+    }
+
+    function renderLbTokenStatus(tokStatus) {
+        if (!lbTokenStatusBadge) return;
+        if (!tokStatus || !tokStatus.has_token) {
+            lbTokenStatusBadge.textContent = "Token: Not set";
+            lbTokenStatusBadge.classList.remove("active");
+            if (btnClearLbToken) btnClearLbToken.classList.add("hidden");
+            return;
+        }
+        const srcLabel = tokStatus.source === "env"
+            ? "Env var"
+            : (tokStatus.source === "config" ? "Saved (0600)" : "Session");
+        lbTokenStatusBadge.textContent = `${srcLabel} ${tokStatus.masked || ""}`.trim();
+        lbTokenStatusBadge.classList.add("active");
+        if (btnClearLbToken) {
+            btnClearLbToken.classList.toggle("hidden", tokStatus.source === "env");
         }
     }
 
@@ -460,6 +490,122 @@ document.addEventListener("DOMContentLoaded", () => {
                 uploadArchiveFile(e.dataTransfer.files[0]);
             }
         });
+
+        if (btnToggleLbToken && lbTokenInput) {
+            btnToggleLbToken.addEventListener("click", () => {
+                const hidden = lbTokenInput.type === "password";
+                lbTokenInput.type = hidden ? "text" : "password";
+                btnToggleLbToken.textContent = hidden ? "Hide" : "Show";
+            });
+        }
+
+        if (btnSaveLbToken && lbTokenInput) {
+            btnSaveLbToken.addEventListener("click", async () => {
+                const tok = lbTokenInput.value.trim();
+                if (!tok) {
+                    showDataFeedback("Please paste your ListenBrainz User Token first.", true);
+                    return;
+                }
+                try {
+                    const res = await fetch("/api/listenbrainz-token", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ token: tok, remember: Boolean(chkRememberLbToken && chkRememberLbToken.checked) }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok || !data.success) throw new Error(data.error || "Failed saving token");
+                    lbTokenInput.value = "";
+                    lbTokenInput.type = "password";
+                    if (btnToggleLbToken) btnToggleLbToken.textContent = "Show";
+                    renderLbTokenStatus(data.listenbrainz_token);
+                    showDataFeedback("ListenBrainz User Token stored safely.", false);
+                } catch (err) {
+                    showDataFeedback(err.message, true);
+                }
+            });
+        }
+
+        if (btnClearLbToken) {
+            btnClearLbToken.addEventListener("click", async () => {
+                try {
+                    const res = await fetch("/api/listenbrainz-token", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ clear: true }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok || !data.success) throw new Error(data.error || "Failed clearing token");
+                    renderLbTokenStatus(data.listenbrainz_token);
+                    showDataFeedback("Saved ListenBrainz token removed.", false);
+                } catch (err) {
+                    showDataFeedback(err.message, true);
+                }
+            });
+        }
+
+        async function pollAutoExportStatus() {
+            try {
+                const res = await fetch("/api/listenbrainz-export/status");
+                const data = await res.json();
+                const job = data && data.job;
+                if (!job) return;
+                if (lbExportProgressText) {
+                    lbExportProgressText.textContent = job.progress || job.state;
+                }
+                if (job.state === "completed") {
+                    clearInterval(lbPollTimer);
+                    lbPollTimer = null;
+                    if (btnAutoLbExport) btnAutoLbExport.disabled = false;
+                    showDataFeedback(job.progress || "ListenBrainz export imported successfully!", false);
+                    await loadConfig();
+                    await initTimeRangeAndLoad();
+                } else if (job.state === "failed") {
+                    clearInterval(lbPollTimer);
+                    lbPollTimer = null;
+                    if (btnAutoLbExport) btnAutoLbExport.disabled = false;
+                    showDataFeedback(job.error || "Automatic ListenBrainz export failed.", true);
+                }
+            } catch (err) {
+                console.error("Failed polling export status:", err);
+            }
+        }
+
+        if (btnAutoLbExport) {
+            btnAutoLbExport.addEventListener("click", async () => {
+                const tok = lbTokenInput ? lbTokenInput.value.trim() : "";
+                const remember = Boolean(chkRememberLbToken && chkRememberLbToken.checked);
+                btnAutoLbExport.disabled = true;
+                if (lbExportProgressText) lbExportProgressText.textContent = "Starting ListenBrainz export...";
+                showDataFeedback("Connecting to ListenBrainz Export API...", false);
+                try {
+                    const payload = tok ? { token: tok, remember } : {};
+                    const res = await fetch("/api/listenbrainz-export/start", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(payload),
+                    });
+                    const data = await res.json();
+                    if (!res.ok || !data.success) {
+                        throw new Error(data.error || "Failed starting ListenBrainz export");
+                    }
+                    if (tok && lbTokenInput) {
+                        lbTokenInput.value = "";
+                        lbTokenInput.type = "password";
+                        if (btnToggleLbToken) btnToggleLbToken.textContent = "Show";
+                    }
+                    renderLbTokenStatus(data.listenbrainz_token);
+                    if (lbExportProgressText && data.job) {
+                        lbExportProgressText.textContent = data.job.progress || "Queued...";
+                    }
+                    if (lbPollTimer) clearInterval(lbPollTimer);
+                    lbPollTimer = setInterval(pollAutoExportStatus, 2000);
+                } catch (err) {
+                    btnAutoLbExport.disabled = false;
+                    if (lbExportProgressText) lbExportProgressText.textContent = "";
+                    showDataFeedback(err.message, true);
+                }
+            });
+        }
     }
 
     async function initTimeRangeAndLoad() {
@@ -782,6 +928,22 @@ document.addEventListener("DOMContentLoaded", () => {
                 `/api/generate-table?type=songs&limit=50&metric=${state.metric}&formats=${formats.join(",")}&flags=${state.showFlags ? 1 : 0}${timeQuery()}`
             );
         });
+
+        if (btnExportYears) {
+            btnExportYears.addEventListener("click", () => {
+                runImageExport(btnExportYears, formats =>
+                    `/api/generate-years?metric=${state.metric}&mode=${state.yearsMode}&formats=${formats.join(",")}${timeQuery()}`
+                );
+            });
+        }
+
+        if (btnExportMap) {
+            btnExportMap.addEventListener("click", () => {
+                runImageExport(btnExportMap, formats =>
+                    `/api/generate-map?metric=${state.metric}&rank_by=${state.mapRankBy}&top_x=${state.countryTopX}&pie=${state.showCountryPie ? 1 : 0}&flags=${state.showFlags ? 1 : 0}&formats=${formats.join(",")}${timeQuery()}`
+                );
+            });
+        }
 
         btnYearsActiveOnly.addEventListener("click", () => {
             state.yearsMode = "active";

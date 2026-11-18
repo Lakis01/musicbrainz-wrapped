@@ -132,8 +132,18 @@ def load_app_config() -> Dict[str, Any]:
 
 def save_app_config(cfg: Dict[str, Any]) -> None:
     os.makedirs(DATA_SUBDIR, exist_ok=True)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+    tmp_path = f"{CONFIG_PATH}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
+    try:
+        os.chmod(tmp_path, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp_path, CONFIG_PATH)
+    try:
+        os.chmod(CONFIG_PATH, 0o600)
+    except OSError:
+        pass
 
 
 def discover_data_dirs() -> List[Dict[str, Any]]:

@@ -11,9 +11,11 @@ import sys
 from collage_generator import (
     export_all_visuals,
     generate_artists_table_image,
+    generate_release_years_image,
     generate_songs_table_image,
     generate_tiered_collage,
     generate_uniform_collage,
+    generate_world_map_image,
     get_uniform_grid_dims,
     normalize_formats,
 )
@@ -77,6 +79,8 @@ def main():
     parser.add_argument("--avif", action="store_true", help="Include AVIF when exporting all visuals")
     parser.add_argument("--artists-table", action="store_true", help="Export Top 50 Artists table graphic")
     parser.add_argument("--songs-table", action="store_true", help="Export Top 50 Songs table graphic")
+    parser.add_argument("--map-graphic", action="store_true", help="Export World Map graphic")
+    parser.add_argument("--years-graphic", action="store_true", help="Export Release Years graphic")
     args = parser.parse_args()
 
     ensure_flag_assets()
@@ -96,7 +100,6 @@ def main():
         print(f"\nImporting latest listens from {active_dir or '(none found — place export in ./imports/)'}...")
         sync_res = sync_data(data_dir=active_dir)
         print(f"Sync complete in {sync_res['elapsed_ms']} ms ({sync_res['new_scrobbles']} new listens, {sync_res['total_listens']} total).")
-        export_all_visuals(timeframe=args.timeframe, metric=args.metric, formats=fmt_list, show_flags=args.show_flags)
 
     stats = get_overall_stats(timeframe=args.timeframe)
     print("=" * 64)
@@ -156,6 +159,25 @@ def main():
             formats=fmt_list,
         )
         print(f"Songs table graphic saved: {out}")
+
+    if args.map_graphic and not export_all and not args.sync:
+        out = generate_world_map_image(
+            metric=args.metric,
+            timeframe=args.timeframe,
+            output_path=os.path.join("static", "world_map"),
+            show_flags=args.show_flags,
+            formats=fmt_list,
+        )
+        print(f"World map graphic saved: {out}")
+
+    if args.years_graphic and not export_all and not args.sync:
+        out = generate_release_years_image(
+            metric=args.metric,
+            timeframe=args.timeframe,
+            output_path=os.path.join("static", "release_years"),
+            formats=fmt_list,
+        )
+        print(f"Release years graphic saved: {out}")
 
     if args.collage and not export_all and not args.sync:
         print("\nGenerating album compilation collage...")

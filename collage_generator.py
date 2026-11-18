@@ -8,14 +8,30 @@ proportional bar chart posters, and single-render multi-format export (WebP, AVI
 from __future__ import annotations
 
 import functools
+import json
+import math
 import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Optional, Sequence, Tuple
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+from xml.sax.saxutils import escape as xml_escape
 
 from PIL import Image, ImageDraw, ImageFont
 
-from db import DB_PATH, get_top_albums, get_top_artists, get_top_tracks
+try:
+    import pymupdf  # type: ignore
+except ImportError:  # pragma: no cover
+    pymupdf = None  # type: ignore
+
+from db import (
+    DB_PATH,
+    get_country_stats,
+    get_release_years_stats,
+    get_top_albums,
+    get_top_artists,
+    get_top_tracks,
+)
 from flags import get_flag_rgba
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +46,8 @@ OUTPUT_ARTISTS_WEBP = os.path.join(STATIC_DIR, "top_50_artists.webp")
 OUTPUT_ARTISTS_AVIF = os.path.join(STATIC_DIR, "top_50_artists.avif")
 OUTPUT_SONGS_WEBP = os.path.join(STATIC_DIR, "top_50_songs.webp")
 OUTPUT_SONGS_AVIF = os.path.join(STATIC_DIR, "top_50_songs.avif")
+OUTPUT_MAP_WEBP = os.path.join(STATIC_DIR, "world_map.webp")
+OUTPUT_YEARS_WEBP = os.path.join(STATIC_DIR, "release_years.webp")
 
 # Gapless Tiered Bento counts:
 # 3 (1x3 hero), 7 (3 + 1x4 med), 11 (3 + 2x4 med), then +5 compact per row:
@@ -130,14 +148,14 @@ def save_canvas_image(canvas: Image.Image, output_path: str, quality: int = 92) 
             if os.path.exists(tmp_png):
                 os.remove(tmp_png)
     elif ext == ".avif":
-        w, h = rgb_canvas.size
-        max_dim = max(w, h)
-        if max_dim > 3840:
-            scale = 3840.0 / max_dim
-            export_canvas = rgb_canvas.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.Resampling.LANCZOS)
-            export_canvas.save(output_path, "AVIF", quality=quality)
-        else:
-            rgb_canvas.save(output_path, "AVIF", quality=quality)
+        rgb_canvas.save(
+            output_path,
+            "AVIF",
+            quality=quality,
+            speed=6,
+            subsampling="4:4:4",
+            max_threads=min(8, os.cpu_count() or 4),
+        )
     else:
         rgb_canvas.save(output_path)
     return output_path
@@ -917,6 +935,679 @@ def generate_songs_table_image(
     return output_path
 
 
+def _format_timeframe_label(
+    timeframe: Optional[str], start_ts: Optional[int], end_ts: Optional[int]
+) -> str:
+    if start_ts and end_ts:
+        d1 = datetime.fromtimestamp(start_ts).strftime("%d %b %Y")
+        d2 = datetime.fromtimestamp(end_ts).strftime("%d %b %Y")
+        return f"{d1} – {d2}"
+    return timeframe.title() if timeframe and timeframe != "all" else "All Time"
+
+
+def _render_svg_to_rgba(svg_str: str, width: int, height: int) -> Optional[Image.Image]:
+    if pymupdf is None:
+        return None
+    doc = pymupdf.open(stream=svg_str.encode("utf-8"), filetype="svg")
+    try:
+        page = doc[0]
+        rect = page.rect
+        sx = width / max(rect.width, 1.0)
+        sy = height / max(rect.height, 1.0)
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(sx, sy), alpha=True)
+        img = Image.frombytes("RGBA", (pix.width, pix.height), pix.samples)
+        if img.size != (width, height):
+            img = img.resize((width, height), Image.Resampling.LANCZOS)
+        return img
+    finally:
+        doc.close()
+
+
+def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
+    s = hex_color.lstrip("#")
+    return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+
+
+def _load_world_geo() -> Dict[str, Any]:
+    main_path = os.path.join(STATIC_DIR, "world_countries.json")
+    extra_path = os.path.join(STATIC_DIR, "countries_svg.json")
+    if not os.path.isfile(main_path):
+        return {}
+    with open(main_path, "r", encoding="utf-8") as fp:
+        main_geo = json.load(fp)
+    if "CN-TW" in main_geo and "TW" not in main_geo:
+        main_geo["TW"] = main_geo.pop("CN-TW")
+    if os.path.isfile(extra_path):
+        with open(extra_path, "r", encoding="utf-8") as fp:
+            extra_geo = json.load(fp)
+        for code, entry in extra_geo.items():
+            if code not in main_geo or code in ("FR", "NO", "XK"):
+                main_geo[code] = entry
+    return main_geo
+
+
+def _get_map_brackets(countries: List[Dict[str, Any]], metric: str, rank_by: str) -> List[Dict[str, Any]]:
+    if rank_by == "artists":
+        return [
+            {"min": 50, "label": "50+ artists", "color": "#f59e0b"},
+            {"min": 20, "label": "20 – 49", "color": "#ec4899"},
+            {"min": 10, "label": "10 – 19", "color": "#a855f7"},
+            {"min": 5, "label": "5 – 9", "color": "#3b82f6"},
+            {"min": 2, "label": "2 – 4", "color": "#06b6d4"},
+            {"min": 1, "label": "1 artist", "color": "#10b981"},
+        ]
+    vals = [c["minutes_listened"] if metric == "minutes" else c["play_count"] for c in countries]
+    max_val = max(vals, default=1) or 1
+    if metric == "plays":
+        if max_val < 500:
+            return [
+                {"min": math.ceil(max_val * 0.55), "label": f"{math.ceil(max_val * 0.55)}+ listens", "color": "#f59e0b"},
+                {"min": math.ceil(max_val * 0.25), "label": f"{math.ceil(max_val * 0.25)}+", "color": "#ec4899"},
+                {"min": math.ceil(max_val * 0.10), "label": f"{math.ceil(max_val * 0.10)}+", "color": "#a855f7"},
+                {"min": 10, "label": "10+", "color": "#3b82f6"},
+                {"min": 3, "label": "3 – 9", "color": "#06b6d4"},
+                {"min": 1, "label": "1 – 2", "color": "#0f766e"},
+            ]
+        return [
+            {"min": 1500, "label": "1,500+ listens", "color": "#f59e0b"},
+            {"min": 500, "label": "500 – 1,499", "color": "#ec4899"},
+            {"min": 150, "label": "150 – 499", "color": "#a855f7"},
+            {"min": 50, "label": "50 – 149", "color": "#3b82f6"},
+            {"min": 15, "label": "15 – 49", "color": "#06b6d4"},
+            {"min": 1, "label": "1 – 14 listens", "color": "#0f766e"},
+        ]
+    return [
+        {"min": 5000, "label": "5,000+ mins (83h+)", "color": "#f59e0b"},
+        {"min": 1500, "label": "1,500 – 5,000m", "color": "#ec4899"},
+        {"min": 500, "label": "500 – 1,500m", "color": "#a855f7"},
+        {"min": 150, "label": "150 – 500m", "color": "#3b82f6"},
+        {"min": 30, "label": "30 – 150m", "color": "#06b6d4"},
+        {"min": 1, "label": "1 – 30m", "color": "#0f766e"},
+    ]
+
+
+def _choropleth_fill(val: float, brackets: List[Dict[str, Any]]) -> Tuple[str, float]:
+    if not val or val <= 0:
+        return "#1e293b", 0.55
+    for b in brackets:
+        if val >= b["min"]:
+            return b["color"], 0.92
+    return "#0f766e", 0.85
+
+
+PIE_COLORS_HEX = [
+    "#3b82f6", "#f59e0b", "#10b981", "#ec4899", "#06b6d4",
+    "#a855f7", "#f43f5e", "#84cc16", "#fb923c", "#6366f1",
+    "#14b8a6", "#eab308", "#e879f9", "#38bdf8", "#f97316",
+]
+
+
+def _era_color_hex(year: int) -> str:
+    if year < 1970:
+        return "#f59e0b"
+    if year < 1980:
+        return "#ec4899"
+    if year < 1990:
+        return "#a855f7"
+    if year < 2000:
+        return "#3b82f6"
+    if year < 2010:
+        return "#06b6d4"
+    if year < 2020:
+        return "#10b981"
+    return "#6366f1"
+
+
+def _paste_rotated_text(
+    canvas: Image.Image,
+    text: str,
+    font,
+    fill: Tuple[int, int, int],
+    anchor_x: int,
+    anchor_y: int,
+    angle: float = 90.0,
+    center_y: bool = False,
+) -> None:
+    if not text:
+        return
+    tmp = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
+    tdraw = ImageDraw.Draw(tmp)
+    bbox = tdraw.textbbox((0, 0), text, font=font)
+    tw = max(1, bbox[2] - bbox[0] + 6)
+    th = max(1, bbox[3] - bbox[1] + 6)
+    sprite = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
+    ImageDraw.Draw(sprite).text((3 - bbox[0], 3 - bbox[1]), text, fill=fill + (255,), font=font)
+    rot = sprite.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
+    px = anchor_x - rot.width // 2
+    py = (anchor_y - rot.height // 2) if center_y else (anchor_y - rot.height)
+    canvas.paste(rot, (px, py), rot)
+
+
+def generate_world_map_image(
+    metric: str = "minutes",
+    rank_by: str = "metric",
+    top_x: int = 5,
+    show_pie: bool = False,
+    show_flags: bool = True,
+    timeframe: Optional[str] = None,
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
+    output_path: str = OUTPUT_MAP_WEBP,
+    formats: Optional[Sequence[str]] = None,
+    db_path: str = DB_PATH,
+):
+    """Render World Map choropleth, bracket legend, Top X Countries table, and optional Donut Pie."""
+    countries = get_country_stats(
+        metric=metric, timeframe=timeframe, start_ts=start_ts, end_ts=end_ts, db_path=db_path
+    )
+    if not countries:
+        return None
+
+    geo = _load_world_geo()
+    is_min = metric == "minutes"
+    brackets = _get_map_brackets(countries, metric=metric, rank_by=rank_by)
+    country_map = {c["country_code"]: c for c in countries}
+
+    canvas_w = 1600
+    padding = 36
+    inner_w = canvas_w - padding * 2
+    header_h = 104
+
+    map_card_h = 796
+    map_w = inner_w - 28
+    map_h = map_w // 2
+
+    actual_top_x = len(countries) if top_x >= 999 else min(max(1, top_x), len(countries))
+    table_rows = countries[:actual_top_x]
+
+    # Build Pie data if enabled
+    pie_segments: List[Dict[str, Any]] = []
+    pie_total = 1.0
+    if show_pie:
+        pie_count = min(12, len(countries)) if top_x >= 999 else actual_top_x
+        top_slice = countries[:pie_count]
+        rest_slice = countries[pie_count:]
+        pie_total = sum((c["minutes_listened"] if is_min else c["play_count"]) for c in countries) or 1.0
+        for idx, c in enumerate(top_slice):
+            val = c["minutes_listened"] if is_min else c["play_count"]
+            pie_segments.append({
+                "label": c["country_name"],
+                "code": c["country_code"],
+                "val": val,
+                "pct": (val / pie_total) * 100.0,
+                "color": PIE_COLORS_HEX[idx % len(PIE_COLORS_HEX)],
+            })
+        rest_val = sum((c["minutes_listened"] if is_min else c["play_count"]) for c in rest_slice)
+        if rest_val > 0:
+            pie_segments.append({
+                "label": f"Other ({len(rest_slice)} countries)",
+                "code": "XX",
+                "val": rest_val,
+                "pct": (rest_val / pie_total) * 100.0,
+                "color": "#475569",
+            })
+
+    row_h = 52
+    table_header_h = 92
+    table_card_h = table_header_h + len(table_rows) * row_h + 18
+    pie_card_h = (320 + len(pie_segments) * 34 + 24) if show_pie else 0
+    insights_h = max(table_card_h, pie_card_h)
+
+    canvas_h = padding + header_h + map_card_h + 24 + insights_h + padding
+    canvas = Image.new("RGB", (canvas_w, canvas_h), color=(9, 13, 22))
+    draw = ImageDraw.Draw(canvas)
+
+    font_tag = get_font(FONT_BOLD, 13)
+    font_title = get_font(FONT_BOLD, 34)
+    font_sub = get_font(FONT_REGULAR, 16)
+    font_h3 = get_font(FONT_BOLD, 20)
+    font_th = get_font(FONT_BOLD, 12)
+    font_cell = get_font(FONT_MEDIUM, 15)
+    font_cell_bold = get_font(FONT_BOLD, 15)
+    font_mono = get_font(FONT_MONO, 14)
+    font_small = get_font(FONT_REGULAR, 13)
+    font_legend = get_font(FONT_MONO, 12)
+
+    # Header
+    draw.rounded_rectangle([(padding, padding), (padding + 188, padding + 24)], radius=4, fill=(29, 78, 216))
+    draw.text((padding + 94, padding + 12), "MUSICBRAINZ WRAPPED", fill=(255, 255, 255), font=font_tag, anchor="mm")
+    draw.text((padding, padding + 32), "WORLD MAP OF LISTENING ORIGINS", fill=(248, 250, 252), font=font_title)
+    metric_label = "Listen Time" if is_min else "No. of Listens"
+    rank_label = "Artist Count" if rank_by == "artists" else metric_label
+    time_label = _format_timeframe_label(timeframe, start_ts, end_ts)
+    draw.text(
+        (padding, padding + 74),
+        f"Colored by {rank_label}  •  Ranked by {metric_label}  •  Timeframe: {time_label}  •  {len(countries)} Countries  •  Unofficial",
+        fill=(148, 163, 184),
+        font=font_sub,
+    )
+
+    # Map Card
+    map_card_y = padding + header_h
+    draw.rounded_rectangle(
+        [(padding, map_card_y), (padding + inner_w, map_card_y + map_card_h)],
+        radius=16,
+        fill=(7, 11, 20),
+        outline=(51, 65, 85),
+        width=1,
+    )
+
+    if geo:
+        svg_parts = [
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 500" width="1000" height="500">',
+            '<rect width="1000" height="500" fill="#070b14" rx="10"/>',
+            '<path d="M 0 125 L 1000 125 M 0 250 L 1000 250 M 0 375 L 1000 375" stroke="#131c2e" stroke-width="1"/>',
+            '<path d="M 250 0 L 250 500 M 500 0 L 500 500 M 750 0 L 750 500" stroke="#131c2e" stroke-width="1"/>',
+        ]
+        for code, entry in geo.items():
+            cdata = country_map.get(code)
+            val = (
+                (cdata["artist_count"] if rank_by == "artists" else (cdata["minutes_listened"] if is_min else cdata["play_count"]))
+                if cdata else 0
+            )
+            fill_hex, op = _choropleth_fill(val, brackets)
+            d_path = xml_escape(str(entry.get("path", "")))
+            svg_parts.append(
+                f'<path d="{d_path}" fill="{fill_hex}" fill-opacity="{op}" stroke="#293548" stroke-width="0.5"/>'
+            )
+        svg_parts.append("</svg>")
+        map_img = _render_svg_to_rgba("".join(svg_parts), map_w, map_h)
+        if map_img is not None:
+            canvas.paste(map_img, (padding + 14, map_card_y + 14), map_img)
+
+    # Legend overlay card inside bottom-left of Map Card
+    leg_items = list(reversed(brackets)) + [{"label": "No listens", "color": "#1e293b"}]
+    leg_w = 216
+    leg_h = 18 + len(leg_items) * 22
+    leg_x = padding + 28
+    leg_y = map_card_y + map_card_h - leg_h - 20
+    draw.rounded_rectangle(
+        [(leg_x, leg_y), (leg_x + leg_w, leg_y + leg_h)],
+        radius=10,
+        fill=(15, 23, 42),
+        outline=(51, 65, 85),
+        width=1,
+    )
+    for idx, item in enumerate(leg_items):
+        iy = leg_y + 12 + idx * 22
+        draw.rounded_rectangle(
+            [(leg_x + 12, iy + 2), (leg_x + 28, iy + 13)],
+            radius=2,
+            fill=_hex_to_rgb(item["color"]),
+        )
+        draw.text((leg_x + 38, iy + 7), item["label"], fill=(203, 213, 225), font=font_legend, anchor="lm")
+
+    # Insights grid (Table + optional Pie)
+    grid_y = map_card_y + map_card_h + 24
+    table_w = 960 if show_pie else inner_w
+    draw.rounded_rectangle(
+        [(padding, grid_y), (padding + table_w, grid_y + table_card_h)],
+        radius=16,
+        fill=(19, 28, 46),
+        outline=(42, 55, 82),
+        width=1,
+    )
+    table_title = f"All Countries ({len(countries)})" if top_x >= 999 else f"Top {actual_top_x} Countries"
+    draw.text((padding + 22, grid_y + 22), table_title, fill=(248, 250, 252), font=font_h3)
+    draw.rounded_rectangle([(padding + table_w - 134, grid_y + 18), (padding + table_w - 20, grid_y + 44)], radius=6, fill=(29, 78, 216))
+    draw.text((padding + table_w - 77, grid_y + 31), metric_label, fill=(255, 255, 255), font=font_small, anchor="mm")
+
+    # Table column positions
+    col_rank_x = padding + 24
+    col_country_x = padding + 68
+    col_time_x = padding + (430 if show_pie else 570)
+    col_plays_x = padding + (535 if show_pie else 715)
+    col_art_x = padding + (615 if show_pie else 835)
+    col_share_x = padding + (755 if show_pie else 1070)
+    col_lead_x = padding + (780 if show_pie else 1105)
+
+    th_y = grid_y + 68
+    draw.line([(padding + 18, th_y + 14), (padding + table_w - 18, th_y + 14)], fill=(42, 55, 82), width=1)
+    draw.text((col_rank_x, th_y), "#", fill=(148, 163, 184), font=font_th, anchor="lm")
+    draw.text((col_country_x, th_y), "COUNTRY", fill=(148, 163, 184), font=font_th, anchor="lm")
+    draw.text((col_time_x, th_y), "LISTEN TIME", fill=(148, 163, 184), font=font_th, anchor="rm")
+    draw.text((col_plays_x, th_y), "LISTENS", fill=(148, 163, 184), font=font_th, anchor="rm")
+    draw.text((col_art_x, th_y), "ARTISTS", fill=(148, 163, 184), font=font_th, anchor="rm")
+    draw.text((col_share_x, th_y), "SHARE", fill=(148, 163, 184), font=font_th, anchor="rm")
+    draw.text((col_lead_x, th_y), "LEADING ARTIST", fill=(148, 163, 184), font=font_th, anchor="lm")
+
+    for idx, c in enumerate(table_rows):
+        ry = grid_y + table_header_h + idx * row_h
+        if idx % 2 == 0:
+            draw.rounded_rectangle([(padding + 14, ry + 2), (padding + table_w - 14, ry + row_h - 4)], radius=8, fill=(15, 23, 42))
+        cy = ry + row_h // 2
+        draw.text((col_rank_x, cy), f"#{c['rank']}", fill=(203, 213, 225), font=font_mono, anchor="lm")
+
+        cx = col_country_x
+        cc = c.get("country_code")
+        if show_flags and cc and cc != "XX":
+            fimg = get_flag_rgba(cc, 24, 18)
+            canvas.paste(fimg, (cx, cy - 9), fimg)
+            cx += 32
+        cname = _truncate_text(draw, c["country_name"], font_cell_bold, (col_time_x - 110) - cx)
+        draw.text((cx, cy), cname, fill=(248, 250, 252), font=font_cell_bold, anchor="lm")
+
+        time_txt = f"{c['minutes_listened']:,.0f}m ({c['hours_listened']:.1f}h)"
+        draw.text((col_time_x, cy), time_txt, fill=(125, 211, 252), font=font_mono, anchor="rm")
+        draw.text((col_plays_x, cy), f"{c['play_count']:,}", fill=(203, 213, 225), font=font_mono, anchor="rm")
+        draw.text((col_art_x, cy), f"{c['artist_count']:,}", fill=(203, 213, 225), font=font_mono, anchor="rm")
+
+        share_color = _hex_to_rgb(PIE_COLORS_HEX[idx % len(PIE_COLORS_HEX)])
+        bar_w = 56 if show_pie else 90
+        bar_x = col_share_x - bar_w - 54
+        draw.text((bar_x - 8, cy), f"{c['share_pct']}%", fill=(248, 250, 252), font=font_mono, anchor="rm")
+        draw.rounded_rectangle([(bar_x, cy - 4), (bar_x + bar_w, cy + 4)], radius=4, fill=(30, 41, 59))
+        fill_px = max(4, int(bar_w * min(100.0, c["share_pct"]) / 100.0)) if c["share_pct"] > 0 else 0
+        if fill_px > 0:
+            draw.rounded_rectangle([(bar_x, cy - 4), (bar_x + fill_px, cy + 4)], radius=4, fill=share_color)
+
+        lead_name = (c.get("top_artists") or [{}])[0].get("artist_name", "—")
+        lead_txt = _truncate_text(draw, lead_name, font_cell, (padding + table_w - 20) - col_lead_x)
+        draw.text((col_lead_x, cy), lead_txt, fill=(203, 213, 225), font=font_cell, anchor="lm")
+
+    # Optional Country Donut Pie Card
+    if show_pie:
+        pie_x = padding + table_w + 24
+        pie_w = inner_w - table_w - 24
+        draw.rounded_rectangle(
+            [(pie_x, grid_y), (pie_x + pie_w, grid_y + pie_card_h)],
+            radius=16,
+            fill=(19, 28, 46),
+            outline=(42, 55, 82),
+            width=1,
+        )
+        draw.text((pie_x + 22, grid_y + 22), "Country Share Breakdown", fill=(248, 250, 252), font=font_h3)
+
+        cx_svg, cy_svg, r_outer, r_inner = 120, 120, 104, 56
+        ang = -math.pi / 2
+        arc_paths = []
+        for seg in pie_segments:
+            frac = seg["val"] / pie_total
+            sweep = frac * math.pi * 2
+            end_ang = ang + sweep
+            large = 1 if sweep > math.pi else 0
+            if frac >= 0.999:
+                arc_paths.append(
+                    f'<circle cx="{cx_svg}" cy="{cy_svg}" r="{r_outer}" fill="{seg["color"]}"/>'
+                    f'<circle cx="{cx_svg}" cy="{cy_svg}" r="{r_inner}" fill="#131c2e"/>'
+                )
+            else:
+                x1, y1 = cx_svg + r_outer * math.cos(ang), cy_svg + r_outer * math.sin(ang)
+                x2, y2 = cx_svg + r_outer * math.cos(end_ang), cy_svg + r_outer * math.sin(end_ang)
+                x3, y3 = cx_svg + r_inner * math.cos(end_ang), cy_svg + r_inner * math.sin(end_ang)
+                x4, y4 = cx_svg + r_inner * math.cos(ang), cy_svg + r_inner * math.sin(ang)
+                d = (
+                    f"M {x1:.2f} {y1:.2f} A {r_outer} {r_outer} 0 {large} 1 {x2:.2f} {y2:.2f} "
+                    f"L {x3:.2f} {y3:.2f} A {r_inner} {r_inner} 0 {large} 0 {x4:.2f} {y4:.2f} Z"
+                )
+                arc_paths.append(f'<path d="{d}" fill="{seg["color"]}" stroke="#090d16" stroke-width="1.5"/>')
+            ang = end_ang
+
+        pie_svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240">'
+            + "".join(arc_paths)
+            + "</svg>"
+        )
+        pie_img = _render_svg_to_rgba(pie_svg, 240, 240)
+        pie_cx = pie_x + pie_w // 2
+        pie_cy = grid_y + 185
+        if pie_img is not None:
+            canvas.paste(pie_img, (pie_cx - 120, pie_cy - 120), pie_img)
+        center_txt = f"{round(pie_total / 60):,}h" if is_min else f"{int(pie_total):,}"
+        center_sub = "attributed" if is_min else "listens"
+        draw.text((pie_cx, pie_cy - 8), center_txt, fill=(248, 250, 252), font=font_h3, anchor="mm")
+        draw.text((pie_cx, pie_cy + 14), center_sub, fill=(148, 163, 184), font=font_small, anchor="mm")
+
+        leg_start_y = grid_y + 318
+        for idx, seg in enumerate(pie_segments):
+            ly = leg_start_y + idx * 34
+            draw.rounded_rectangle([(pie_x + 20, ly), (pie_x + pie_w - 20, ly + 28)], radius=6, fill=(15, 23, 42))
+            draw.rounded_rectangle([(pie_x + 30, ly + 9), (pie_x + 40, ly + 19)], radius=3, fill=_hex_to_rgb(seg["color"]))
+            lx = pie_x + 48
+            if show_flags and seg["code"] != "XX":
+                fimg = get_flag_rgba(seg["code"], 18, 13)
+                canvas.paste(fimg, (lx, ly + 7), fimg)
+                lx += 24
+            val_str = f"{seg['pct']:.1f}% ({seg['val']:,.0f}{'m' if is_min else 'p'})"
+            vw = int(draw.textlength(val_str, font=font_legend))
+            lbl_txt = _truncate_text(draw, seg["label"], font_small, (pie_x + pie_w - 38 - vw) - lx)
+            draw.text((lx, ly + 14), lbl_txt, fill=(226, 232, 240), font=font_small, anchor="lm")
+            draw.text((pie_x + pie_w - 30, ly + 14), val_str, fill=(148, 163, 184), font=font_legend, anchor="rm")
+
+    if formats is not None:
+        return save_canvas_formats(canvas, output_path, formats, quality=92)
+    save_canvas_image(canvas, output_path, quality=92)
+    return output_path
+
+
+def generate_release_years_image(
+    metric: str = "minutes",
+    mode: str = "active",
+    timeframe: Optional[str] = None,
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
+    output_path: str = OUTPUT_YEARS_WEBP,
+    formats: Optional[Sequence[str]] = None,
+    db_path: str = DB_PATH,
+):
+    """Render unbinned individual Release Years distribution poster with KPIs and top-year highlights."""
+    payload = get_release_years_stats(
+        metric=metric, timeframe=timeframe, start_ts=start_ts, end_ts=end_ts, db_path=db_path
+    )
+    timeline = payload.get("years") or []
+    summary = payload.get("summary") or {}
+    is_min = metric == "minutes"
+    active_years = [y for y in timeline if (y["minutes_listened"] if is_min else y["play_count"]) > 0]
+    if not active_years:
+        return None
+
+    display_years = active_years if mode == "active" else timeline
+    top_years = sorted(
+        active_years,
+        key=lambda y: (y["minutes_listened"] if is_min else y["play_count"], y["year"]),
+        reverse=True,
+    )[:8]
+
+    canvas_w = 1600
+    padding = 36
+    inner_w = canvas_w - padding * 2
+    header_h = 104
+    kpi_h = 92
+    chart_card_h = 490
+    top_rows = (len(top_years) + 1) // 2
+    highlights_h = 68 + top_rows * 88 + 14
+
+    canvas_h = padding + header_h + kpi_h + 20 + chart_card_h + 22 + highlights_h + padding
+    canvas = Image.new("RGB", (canvas_w, canvas_h), color=(9, 13, 22))
+    draw = ImageDraw.Draw(canvas)
+
+    font_tag = get_font(FONT_BOLD, 13)
+    font_title = get_font(FONT_BOLD, 34)
+    font_sub = get_font(FONT_REGULAR, 16)
+    font_kpi_lbl = get_font(FONT_BOLD, 11)
+    font_kpi_val = get_font(FONT_BOLD, 22)
+    font_h3 = get_font(FONT_BOLD, 20)
+    font_legend = get_font(FONT_MEDIUM, 13)
+    font_bar_val = get_font(FONT_MONO, 10)
+    font_bar_yr = get_font(FONT_MONO, 11)
+    font_card_title = get_font(FONT_BOLD, 16)
+    font_card_sub = get_font(FONT_REGULAR, 13)
+    font_mono = get_font(FONT_MONO, 14)
+
+    # Header
+    draw.rounded_rectangle([(padding, padding), (padding + 188, padding + 24)], radius=4, fill=(29, 78, 216))
+    draw.text((padding + 94, padding + 12), "MUSICBRAINZ WRAPPED", fill=(255, 255, 255), font=font_tag, anchor="mm")
+    draw.text((padding, padding + 32), "RELEASE YEARS DISTRIBUTION (UNBINNED)", fill=(248, 250, 252), font=font_title)
+    metric_label = "Listen Time" if is_min else "No. of Listens"
+    mode_label = "Active Years" if mode == "active" else "Full Continuous Timeline"
+    time_label = _format_timeframe_label(timeframe, start_ts, end_ts)
+    draw.text(
+        (padding, padding + 74),
+        f"Metric: {metric_label}  •  View: {mode_label}  •  Timeframe: {time_label}  •  Unofficial",
+        fill=(148, 163, 184),
+        font=font_sub,
+    )
+
+    # 5-card KPI Strip
+    kpi_y = padding + header_h
+    kpi_gap = 14
+    kpi_w = (inner_w - kpi_gap * 4) // 5
+    peak_val_str = f"{summary['peak_minutes']:,.0f}m" if is_min else f"{summary['peak_plays']:,}p"
+    kpis = [
+        ("PEAK YEAR", f"{summary.get('peak_year')} ({peak_val_str})" if summary.get("peak_year") else "--"),
+        ("WEIGHTED AVG YEAR", f"{summary['weighted_avg_year']}" if summary.get("weighted_avg_year") else "--"),
+        ("RELEASE SPAN", f"{summary['earliest_year']} – {summary['latest_year']}" if summary.get("earliest_year") else "--"),
+        ("ACTIVE YEARS", f"{summary.get('active_years_count', 0)} years"),
+        ("METADATA COVERAGE", f"{summary.get('coverage_pct', 0)}%"),
+    ]
+    for idx, (lbl, val_txt) in enumerate(kpis):
+        kx = padding + idx * (kpi_w + kpi_gap)
+        draw.rounded_rectangle(
+            [(kx, kpi_y), (kx + kpi_w, kpi_y + kpi_h)],
+            radius=12,
+            fill=(19, 28, 46),
+            outline=(42, 55, 82),
+            width=1,
+        )
+        draw.text((kx + 18, kpi_y + 24), lbl, fill=(148, 163, 184), font=font_kpi_lbl, anchor="lm")
+        draw.text((kx + 18, kpi_y + 58), val_txt, fill=(248, 250, 252), font=font_kpi_val, anchor="lm")
+
+    # Chart Card
+    chart_y = kpi_y + kpi_h + 20
+    draw.rounded_rectangle(
+        [(padding, chart_y), (padding + inner_w, chart_y + chart_card_h)],
+        radius=16,
+        fill=(19, 28, 46),
+        outline=(42, 55, 82),
+        width=1,
+    )
+
+    eras = [
+        ("1960s & earlier", "#f59e0b"),
+        ("1970s", "#ec4899"),
+        ("1980s", "#a855f7"),
+        ("1990s", "#3b82f6"),
+        ("2000s", "#06b6d4"),
+        ("2010s", "#10b981"),
+        ("2020s", "#6366f1"),
+    ]
+    lx = padding + 24
+    ly = chart_y + 28
+    for era_lbl, era_hex in eras:
+        draw.ellipse([(lx, ly - 5), (lx + 10, ly + 5)], fill=_hex_to_rgb(era_hex))
+        lx += 16
+        draw.text((lx, ly), era_lbl, fill=(203, 213, 225), font=font_legend, anchor="lm")
+        lx += int(draw.textlength(era_lbl, font=font_legend)) + 22
+
+    # Unbinned bars area
+    plot_x = padding + 24
+    plot_w = inner_w - 48
+    bar_top = chart_y + 104
+    bar_bottom = chart_y + chart_card_h - 62
+    bar_area_h = bar_bottom - bar_top
+    n_bars = len(display_years)
+    col_step = plot_w / float(max(1, n_bars))
+    bar_w = max(4, min(26, int(col_step * 0.72)))
+    max_val = max((y["minutes_listened"] if is_min else y["play_count"]) for y in display_years) or 1.0
+    dense_labels = n_bars > 76
+
+    for idx, yr in enumerate(display_years):
+        val = yr["minutes_listened"] if is_min else yr["play_count"]
+        cx = int(plot_x + (idx + 0.5) * col_step)
+        bx0 = cx - bar_w // 2
+        bx1 = bx0 + bar_w
+        era_rgb = _hex_to_rgb(_era_color_hex(yr["year"]))
+
+        # Subtle background bar track
+        draw.rounded_rectangle([(bx0, bar_top), (bx1, bar_bottom)], radius=min(3, bar_w // 2), fill=(25, 36, 58))
+        if val > 0:
+            ratio = val / max_val
+            fill_h = max(6, int(bar_area_h * ratio))
+            by0 = bar_bottom - fill_h
+            draw.rounded_rectangle([(bx0, by0), (bx1, bar_bottom)], radius=min(3, bar_w // 2), fill=era_rgb)
+            if not dense_labels or val >= max_val * 0.12 or yr["year"] == summary.get("peak_year"):
+                v_txt = f"{yr['minutes_listened']:,.0f}m" if is_min else f"{yr['play_count']}"
+                _paste_rotated_text(canvas, v_txt, font_bar_val, (203, 213, 225), cx, by0 - 4, angle=90.0)
+
+        show_yr_lbl = (
+            (not dense_labels)
+            or (yr["year"] % 5 == 0)
+            or (idx == 0)
+            or (idx == n_bars - 1)
+        )
+        if show_yr_lbl:
+            if mode == "active" and not dense_labels:
+                _paste_rotated_text(canvas, str(yr["year"]), font_bar_yr, (148, 163, 184), cx, bar_bottom + 42, angle=90.0)
+            else:
+                draw.text((cx, bar_bottom + 14), str(yr["year"]), fill=(148, 163, 184), font=font_bar_yr, anchor="mm")
+
+    # Top Release Years Highlights Card
+    hi_y = chart_y + chart_card_h + 22
+    draw.rounded_rectangle(
+        [(padding, hi_y), (padding + inner_w, hi_y + highlights_h)],
+        radius=16,
+        fill=(19, 28, 46),
+        outline=(42, 55, 82),
+        width=1,
+    )
+    draw.text((padding + 24, hi_y + 22), "Top Release Years & Signature Albums", fill=(248, 250, 252), font=font_h3)
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        def _load_yr_cov(yr_entry):
+            top_albs = yr_entry.get("top_albums") or []
+            if not top_albs:
+                return _round_image(get_placeholder_cover(58, str(yr_entry["year"]), "Release Year", yr_entry["year"]), radius=8)
+            alb = top_albs[0]
+            return _round_image(
+                load_album_image(
+                    {
+                        "cover_local_path": alb.get("cover_local_path"),
+                        "release_name": alb.get("release_name", ""),
+                        "artist_name": alb.get("artist_name", ""),
+                        "rank": yr_entry["year"],
+                    },
+                    58,
+                ),
+                radius=8,
+            )
+
+        yr_covers = list(ex.map(_load_yr_cov, top_years))
+
+    card_gap = 16
+    card_w = (inner_w - 48 - card_gap) // 2
+    card_h = 76
+    for idx, yr in enumerate(top_years):
+        col = idx % 2
+        row = idx // 2
+        cx = padding + 24 + col * (card_w + card_gap)
+        cy = hi_y + 62 + row * 88
+        draw.rounded_rectangle([(cx, cy), (cx + card_w, cy + card_h)], radius=10, fill=(15, 23, 42))
+
+        era_rgb = _hex_to_rgb(_era_color_hex(yr["year"]))
+        draw.rounded_rectangle([(cx + 12, cy + 16), (cx + 76, cy + 60)], radius=8, fill=era_rgb)
+        draw.text((cx + 44, cy + 38), str(yr["year"]), fill=(10, 14, 24), font=font_card_title, anchor="mm")
+
+        canvas.paste(yr_covers[idx], (cx + 88, cy + 9), yr_covers[idx])
+
+        top_alb = (yr.get("top_albums") or [{}])[0]
+        alb_line = (
+            f"{top_alb.get('release_name', 'Various')} — {top_alb.get('artist_name', '')}"
+            if top_alb else f"{yr['album_count']} albums"
+        )
+        stat_line = (
+            f"{yr['minutes_listened']:,.0f}m ({yr['hours_listened']:.1f}h) • {yr['play_count']} plays • {yr['share_pct']}% share"
+        )
+        tx = cx + 160
+        max_tw = (cx + card_w - 16) - tx
+        draw.text((tx, cy + 25), _truncate_text(draw, alb_line, font_card_title, max_tw), fill=(248, 250, 252), font=font_card_title, anchor="lm")
+        draw.text((tx, cy + 51), _truncate_text(draw, stat_line, font_card_sub, max_tw), fill=(148, 163, 184), font=font_card_sub, anchor="lm")
+
+    if formats is not None:
+        return save_canvas_formats(canvas, output_path, formats, quality=92)
+    save_canvas_image(canvas, output_path, quality=92)
+    return output_path
+
+
 def export_all_visuals(
     timeframe: Optional[str] = None,
     metric: str = "minutes",
@@ -954,10 +1645,27 @@ def export_all_visuals(
         formats=fmt_list,
         db_path=db_path,
     )
+    m_out = generate_world_map_image(
+        metric=metric,
+        timeframe=timeframe,
+        output_path=os.path.join(STATIC_DIR, "world_map"),
+        show_flags=show_flags,
+        formats=fmt_list,
+        db_path=db_path,
+    )
+    y_out = generate_release_years_image(
+        metric=metric,
+        timeframe=timeframe,
+        output_path=os.path.join(STATIC_DIR, "release_years"),
+        formats=fmt_list,
+        db_path=db_path,
+    )
     return {
         "collage": c_out or [],
         "artists": a_out or [],
         "songs": s_out or [],
+        "map": m_out or [],
+        "years": y_out or [],
     }
 
 

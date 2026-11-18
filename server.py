@@ -5,17 +5,22 @@ from __future__ import annotations
 import http.server
 import json
 import os
+import re
 import shutil
 import sys
+import tempfile
+import uuid
 import urllib.parse
 from typing import Any, Dict, List
 
 from collage_generator import (
     calculate_tiered_limit,
     generate_artists_table_image,
+    generate_release_years_image,
     generate_songs_table_image,
     generate_tiered_collage,
     generate_uniform_collage,
+    generate_world_map_image,
     get_uniform_grid_dims,
     normalize_formats,
 )
@@ -43,10 +48,60 @@ from importer import (
     set_active_data_dir,
     sync_data,
 )
+from listenbrainz_export import (
+    clear_token,
+    get_export_job_status,
+    get_token_status,
+    set_token,
+    start_background_export,
+)
 
 PORT = 8080
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
+TEMP_EXPORT_DIR = os.path.join(tempfile.gettempdir(), "musicbrainz_wrapped_exports")
+_SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{4,64}$")
+_SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,160}$")
+
+
+def _prune_transient_exports(max_jobs: int = 12) -> None:
+    if not os.path.isdir(TEMP_EXPORT_DIR):
+        return
+    try:
+        entries = [
+            os.path.join(TEMP_EXPORT_DIR, name)
+            for name in os.listdir(TEMP_EXPORT_DIR)
+        ]
+        dirs = [p for p in entries if os.path.isdir(p)]
+        if len(dirs) <= max_jobs:
+            return
+        dirs.sort(key=os.path.getmtime)
+        for old_dir in dirs[: len(dirs) - max_jobs]:
+            shutil.rmtree(old_dir, ignore_errors=True)
+    except OSError:
+        pass
+
+
+def _allocate_transient_stem(stem_name: str) -> tuple[str, str]:
+    os.makedirs(TEMP_EXPORT_DIR, exist_ok=True)
+    _prune_transient_exports()
+    job_id = uuid.uuid4().hex[:12]
+    job_dir = os.path.join(TEMP_EXPORT_DIR, job_id)
+    os.makedirs(job_dir, exist_ok=True)
+    return job_id, os.path.join(job_dir, stem_name)
+
+
+def _format_transient_files(job_id: str, saved_paths: List[str] | None) -> List[Dict[str, str]]:
+    files = []
+    for p in saved_paths or []:
+        fname = os.path.basename(p)
+        ext = os.path.splitext(fname)[1].lstrip(".").lower()
+        files.append({
+            "format": ext,
+            "url": f"/api/download-export/{job_id}/{urllib.parse.quote(fname)}",
+            "filename": fname,
+        })
+    return files
 
 
 class CustomHandler(http.server.SimpleHTTPRequestHandler):
@@ -86,6 +141,32 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _handle_download_export(self, path: str) -> None:
+        parts = path[len("/api/download-export/"):].split("/")
+        if len(parts) != 2:
+            self._send_json({"error": "Invalid export path"}, status=400)
+            return
+        job_id = urllib.parse.unquote(parts[0])
+        filename = urllib.parse.unquote(parts[1])
+        if not _SAFE_TOKEN_RE.match(job_id) or not _SAFE_FILENAME_RE.match(filename) or ".." in filename:
+            self._send_json({"error": "Invalid export identifier"}, status=400)
+            return
+        base_real = os.path.realpath(TEMP_EXPORT_DIR)
+        file_path = os.path.realpath(os.path.join(TEMP_EXPORT_DIR, job_id, filename))
+        if not file_path.startswith(base_real + os.sep) or not os.path.isfile(file_path):
+            self._send_json({"error": "Export file not found"}, status=404)
+            return
+        ext = os.path.splitext(filename)[1].lower()
+        ctype = self.extensions_map.get(ext, "application/octet-stream")
+        with open(file_path, "rb") as fp:
+            data = fp.read()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -120,6 +201,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             "total_listens": stats.get("total_listens", 0),
             "discovered": discover_data_dirs(),
             "cjxl_available": shutil.which("cjxl") is not None,
+            "listenbrainz_token": get_token_status(),
         }
 
     def handle_api_post(self, path: str, params: Dict[str, List[str]]) -> None:
@@ -169,6 +251,33 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 self._send_json({"success": False, "error": str(exc)}, status=400)
             return
 
+        if path == "/api/listenbrainz-token":
+            try:
+                raw = self.rfile.read(length) if length > 0 else b"{}"
+                body = json.loads(raw.decode("utf-8"))
+                if body.get("clear"):
+                    tok_status = clear_token()
+                else:
+                    tok = str(body.get("token") or "")
+                    remember = bool(body.get("remember", False))
+                    tok_status = set_token(tok, remember=remember)
+                self._send_json({"success": True, "listenbrainz_token": tok_status})
+            except Exception as exc:
+                self._send_json({"success": False, "error": str(exc)}, status=400)
+            return
+
+        if path == "/api/listenbrainz-export/start":
+            try:
+                raw = self.rfile.read(length) if length > 0 else b"{}"
+                body = json.loads(raw.decode("utf-8")) if raw.strip() else {}
+                tok = body.get("token")
+                remember = bool(body.get("remember", False))
+                job = start_background_export(token=tok, remember=remember)
+                self._send_json({"success": True, "job": job, "listenbrainz_token": get_token_status()})
+            except Exception as exc:
+                self._send_json({"success": False, "error": str(exc)}, status=400)
+            return
+
         self._send_json({"error": "Endpoint not found"}, status=404)
 
     def handle_api_get(self, path: str, params: Dict[str, List[str]]) -> None:
@@ -187,6 +296,8 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
 
         if path == "/api/config":
             response_data = self._build_config_payload()
+        elif path == "/api/listenbrainz-export/status":
+            response_data = {"success": True, "job": get_export_job_status(), "listenbrainz_token": get_token_status()}
         elif path == "/api/select-data-source":
             target = params.get("path", [""])[0]
             try:
@@ -240,6 +351,9 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 "data_dir": sync_res.get("data_dir"),
                 "message": f"Sync completed in {sync_res.get('elapsed_ms', 0)} ms ({sync_res.get('new_scrobbles', 0)} new listens).",
             }
+        elif path.startswith("/api/download-export/"):
+            self._handle_download_export(path)
+            return
         elif path == "/api/generate-collage":
             layout = params.get("layout", ["tiered"])[0]
             raw_formats = params.get("formats", [params.get("format", ["webp"])[0]])[0]
@@ -249,7 +363,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             flag_tag = "flags" if show_flags else "noflags"
             cap_tag = "cap" if show_captions else "nocap"
             stem_name = f"collage_{layout}_{metric}_{timeframe}_{limit}_{cap_tag}_{flag_tag}"
-            stem_path = os.path.join(STATIC_DIR, stem_name)
+            job_id, stem_path = _allocate_transient_stem(stem_name)
 
             try:
                 if layout == "tiered":
@@ -281,11 +395,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 self._send_json({"success": False, "error": str(exc)}, status=500)
                 return
 
-            files = []
-            for p in saved_paths or []:
-                fname = os.path.basename(p)
-                ext = os.path.splitext(fname)[1].lstrip(".").lower()
-                files.append({"format": ext, "url": f"/{fname}", "filename": fname})
+            files = _format_transient_files(job_id, saved_paths)
             response_data = {
                 "success": bool(files),
                 "url": files[0]["url"] if files else None,
@@ -298,7 +408,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             show_flags = params.get("flags", ["1"])[0] in ("1", "true", "yes")
             flag_tag = "flags" if show_flags else "noflags"
             stem_name = f"table_{table_type}_{metric}_{timeframe}_{limit}_{flag_tag}"
-            stem_path = os.path.join(STATIC_DIR, stem_name)
+            job_id, stem_path = _allocate_transient_stem(stem_name)
 
             try:
                 if table_type == "artists":
@@ -327,11 +437,75 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 self._send_json({"success": False, "error": str(exc)}, status=500)
                 return
 
-            files = []
-            for p in saved_paths or []:
-                fname = os.path.basename(p)
-                ext = os.path.splitext(fname)[1].lstrip(".").lower()
-                files.append({"format": ext, "url": f"/{fname}", "filename": fname})
+            files = _format_transient_files(job_id, saved_paths)
+            response_data = {
+                "success": bool(files),
+                "url": files[0]["url"] if files else None,
+                "files": files,
+            }
+        elif path == "/api/generate-map":
+            raw_formats = params.get("formats", [params.get("format", ["webp"])[0]])[0]
+            fmt_list = normalize_formats(raw_formats.split(","))
+            show_flags = params.get("flags", ["1"])[0] in ("1", "true", "yes")
+            rank_by = params.get("rank_by", ["metric"])[0]
+            if rank_by not in ("metric", "artists"):
+                rank_by = "metric"
+            try:
+                top_x = max(1, min(999, int(params.get("top_x", ["5"])[0])))
+            except ValueError:
+                top_x = 5
+            show_pie = params.get("pie", ["0"])[0] in ("1", "true", "yes")
+            flag_tag = "flags" if show_flags else "noflags"
+            stem_name = f"world_map_{metric}_{rank_by}_{timeframe}_top{top_x}_{flag_tag}"
+            job_id, stem_path = _allocate_transient_stem(stem_name)
+
+            try:
+                saved_paths = generate_world_map_image(
+                    metric=metric,
+                    rank_by=rank_by,
+                    top_x=top_x,
+                    show_pie=show_pie,
+                    show_flags=show_flags,
+                    timeframe=timeframe,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    output_path=stem_path,
+                    formats=fmt_list,
+                )
+            except Exception as exc:
+                self._send_json({"success": False, "error": str(exc)}, status=500)
+                return
+
+            files = _format_transient_files(job_id, saved_paths)
+            response_data = {
+                "success": bool(files),
+                "url": files[0]["url"] if files else None,
+                "files": files,
+            }
+        elif path == "/api/generate-years":
+            raw_formats = params.get("formats", [params.get("format", ["webp"])[0]])[0]
+            fmt_list = normalize_formats(raw_formats.split(","))
+            mode = params.get("mode", ["active"])[0]
+            if mode not in ("active", "continuous"):
+                mode = "active"
+            stem_name = f"release_years_{metric}_{mode}_{timeframe}"
+            job_id, stem_path = _allocate_transient_stem(stem_name)
+
+            try:
+                saved_paths = generate_release_years_image(
+                    metric=metric,
+                    mode=mode,
+                    timeframe=timeframe,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    output_path=stem_path,
+                    formats=fmt_list,
+                )
+            except Exception as exc:
+                self._send_json({"success": False, "error": str(exc)}, status=500)
+                return
+
+            files = _format_transient_files(job_id, saved_paths)
             response_data = {
                 "success": bool(files),
                 "url": files[0]["url"] if files else None,

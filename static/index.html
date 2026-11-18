@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MusicBrainz Wrapped — Unofficial Local Listening Analytics</title>
+    <link rel="icon" type="image/webp" href="/logo.webp">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -23,11 +24,7 @@
         <header class="top-nav">
             <div class="brand">
                 <div class="brand-icon" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M9 18V5l12-2v13"></path>
-                        <circle cx="6" cy="18" r="3"></circle>
-                        <circle cx="18" cy="16" r="3"></circle>
-                    </svg>
+                    <img src="/logo.webp" alt="MusicBrainz Wrapped Logo">
                 </div>
                 <div class="brand-text">
                     <h1>MusicBrainz Wrapped</h1>
@@ -407,6 +404,10 @@
                             <button class="btn-toggle active" id="btn-years-active-only" type="button" title="Show only years with listening activity (unbinned)">Active Years</button>
                             <button class="btn-toggle" id="btn-years-continuous" type="button" title="Show every calendar year continuously (unbinned)">Full Timeline</button>
                         </div>
+                        <button class="btn-primary" id="btn-export-years" type="button" title="Export Release Years Graphic in ticked formats">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                            Export Graphic
+                        </button>
                     </div>
                 </div>
 
@@ -502,6 +503,10 @@
                             <input type="checkbox" id="chk-country-pie">
                             <span>Country Pie Chart</span>
                         </label>
+                        <button class="btn-primary" id="btn-export-map" type="button" title="Export World Map & Country Breakdown Graphic in ticked formats">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                            Export Graphic
+                        </button>
                     </div>
                 </div>
 
@@ -625,8 +630,39 @@
                 </div>
             </div>
             <div class="modal-body data-modal-body">
+                <div class="import-section import-api-box">
+                    <div class="api-box-header">
+                        <h3>Automatic ListenBrainz Sync (Official Export API)</h3>
+                        <span class="tag-badge" id="lb-token-status-badge">Token: Not set</span>
+                    </div>
+                    <p class="import-hint">
+                        Triggers <code>api.listenbrainz.org/1/export/</code> (the exact same archive as
+                        <a href="https://listenbrainz.org/settings/export/" target="_blank" rel="noopener noreferrer">listenbrainz.org/settings/export/</a>),
+                        downloads the <code>.zip</code> into <code>imports/</code>, extracts it, and updates your dashboard.
+                        Copy your <strong>User Token</strong> from
+                        <a href="https://listenbrainz.org/settings/" target="_blank" rel="noopener noreferrer">listenbrainz.org/settings/</a>
+                        (no password or cookies needed).
+                    </p>
+                    <div class="custom-path-row">
+                        <input type="password" id="lb-token-input" autocomplete="off" spellcheck="false" placeholder="Paste ListenBrainz User Token...">
+                        <button class="btn-secondary" id="btn-toggle-lb-token" type="button">Show</button>
+                        <button class="btn-secondary" id="btn-save-lb-token" type="button">Save Token</button>
+                        <button class="btn-secondary hidden" id="btn-clear-lb-token" type="button">Forget</button>
+                    </div>
+                    <div class="api-token-options">
+                        <label class="toggle-chip" for="chk-remember-lb-token" title="Store token on disk inside gitignored data/config.json with owner-only 0600 permissions; unchecked keeps it in server RAM only">
+                            <input type="checkbox" id="chk-remember-lb-token">
+                            <span>Remember locally in gitignored <code>data/config.json</code> (chmod 600)</span>
+                        </label>
+                    </div>
+                    <div class="api-export-actions">
+                        <button class="btn-primary" id="btn-auto-lb-export" type="button">Fetch &amp; Import Latest Export</button>
+                        <span id="lb-export-progress-text" class="import-hint"></span>
+                    </div>
+                </div>
+
                 <div class="import-guide-box">
-                    <h3>How to Export Your Listens from ListenBrainz</h3>
+                    <h3>Manual Export Alternative</h3>
                     <ol>
                         <li>Open <a href="https://listenbrainz.org/settings/export/" target="_blank" rel="noopener noreferrer">listenbrainz.org/settings/export/</a> while signed in.</li>
                         <li>Click <strong>Export listens</strong> under the listens section and download your <code>listenbrainz_&lt;username&gt;_&lt;id&gt;.zip</code> archive.</li>
