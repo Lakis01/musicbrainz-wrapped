@@ -32,9 +32,9 @@ pip install -r requirements.txt
 ### What You Can Do in the Dashboard
 
 * **Global Metric & Time Controls:** Toggle between **Listen Time** (minutes/hours, default) and **No. of Listens**, pick listening-year or month presets, or scrub the dual-thumb **Time Interval** slider across all charts and exports.
-* **7 Interactive Analytics Tabs:** **Album Compilation** (Tiered Bento or Uniform Grid), **Top Artists**, **Top Albums**, **Top Songs**, **Release Years** (unbinned year-by-year + Year Spotlight & Ledger), **World Map** (hover/tap country stats + Top X table + optional Pie Chart), and **Listening Habits** (24h clock, weekday rhythm, monthly trend).
+* **7 Interactive Analytics Tabs:** **Album Compilation** (Tiered Bento or Uniform Grid), **Top Artists**, **Top Songs**, **Top Albums**, **Release Years** (unbinned year-by-year, Spotify-style **Listening Age** from weighted avg. year, Year Spotlight & Ledger), **World Map** (hover/tap country stats + Top X table + live **Include Pie Chart** donut panel), and **Listening Habits** (24h clock, weekday rhythm, monthly trend).
 * **Click-Through Drilldowns:** Click any album cover, artist card/row, track, or release-year chip to inspect full release/track breakdowns.
-* **On-Demand Exports Only:** Nothing is auto-generated onto disk when syncing or browsing. Tick any combination of **`WebP`**, **`AVIF`** (full-resolution `4:4:4` chroma), **`JPG`**, or **`JXL`**, then click **Export Top N / Export Graphic** inside the **Album Compilation**, **Top Artists**, **Top Songs**, **Release Years**, or **World Map** tab to render and download only what you want.
+* **On-Demand Exports Only:** Nothing is auto-generated onto disk when syncing or browsing. Tick any combination of **`WebP`**, **`AVIF`** (full-resolution `4:4:4` chroma), **`JPG`**, or **`JXL`**, optionally toggle **Include Flags** (off by default), then either click **Export Top N / Export Graphic** inside any view or click **Export All Graphics** on the right of the Export Formats bar to download all 5 graphics bundled as a `.zip`.
 
 ---
 
@@ -80,29 +80,29 @@ If you prefer offline/manual imports from **[listenbrainz.org/settings/export/](
 All five exportable graphic types generated as WebP snapshots from local listening history:
 
 ### 1. Top 101 Album Collage (`static/top_albums_collage_101.webp`)
-Displays your top 101 albums arranged in a gapless **Tiered Bento** layout (`#1–#3` large Hero row, `#4–#11` two Medium rows of 4, and `#12–#101` Compact rows of 5) with rank badges, release years, artist names, inline vector country flags, and listen time / play counts overlaid on each cover.
+Displays your top 101 albums arranged in a gapless **Tiered Bento** layout (`#1–#3` large Hero row, `#4–#11` two Medium rows of 4, and `#12–#101` Compact rows of 5) with rank badges, release years, artist names, and listen time / play counts overlaid on each cover *(optional country flags can be enabled with **Include Flags**)*.
 
 <p align="center">
   <img src="static/top_albums_collage_101.webp" alt="Top 101 Album Collage" width="820">
 </p>
 
 ### 2. Top 50 Artists & Top 50 Songs Wrapped (`static/top_50_artists.webp`, `static/top_50_songs.webp`)
-* **Top 50 Artists:** Pairs a Gold/Silver/Bronze Top-3 podium (circular artist portraits, inline country flags, hours/minutes, plays, and `% of #1` bars) with ranked `#4–#50` horizontal proportional bar rows.
-* **Top 50 Songs:** Same podium + proportional bar poster tailored to tracks, showing album cover thumbnails, track title, artist + country flag + album, and track duration × play-count context (`MM:SS × Np`).
+* **Top 50 Artists:** 1600px editorial dark-glass poster with an ambient studio-lit gradient backdrop, project logo in the top-right corner, an elevated centerpiece Gold `#1` / Silver `#2` / Bronze `#3` podium with blurred portrait washes, and a 2-column `#4–#50` grid of proportional gradient bars, circular portraits, and a balanced summary card.
+* **Top 50 Songs:** Matching editorial podium + 2-column track poster showcasing album cover thumbnails, track title, artist + album metadata, total listen time, and track duration × play-count context (`MM:SS × Np`).
 
 | Top 50 Artists Wrapped | Top 50 Songs Wrapped |
 | :---: | :---: |
 | ![Top 50 Artists Wrapped](static/top_50_artists.webp) | ![Top 50 Songs Wrapped](static/top_50_songs.webp) |
 
 ### 3. World Map of Listening Origins (`static/world_map.webp`)
-Renders a high-resolution vector choropleth world map colored by listening intensity (or unique artist count) across countries, complete with a color-scale legend and a ranked **Top Countries** table showing inline country flags, listen time, total listens, unique artists, percentage share bar, and leading artist per country (plus an optional **Country Pie Chart** when enabled in the UI).
+Renders a high-resolution vector choropleth world map colored by listening intensity (or unique artist count) across MusicBrainz/ListenBrainz MBID-attributed artist origin countries, complete with a color-scale legend, a ranked **Top Countries** table (listen time, total listens, unique artists, percentage share bar, and leading artist per country), and the **Country Share Breakdown** donut pie chart when **Include Pie Chart** is checked.
 
 <p align="center">
   <img src="static/world_map.webp" alt="World Map of Listening Origins" width="820">
 </p>
 
 ### 4. Unbinned Release Years Distribution (`static/release_years.webp`)
-Plots every individual original album release year without decade-binning—paired with a 5-card KPI summary strip (**Peak Year**, **Weighted Avg Year**, **Release Span**, **Active Years**, **Metadata Coverage**), era color coding (1960s through 2020s), exact per-year totals, and **Top Release Years & Signature Albums** cards featuring the top album cover and listening share for your strongest release years.
+Plots every individual original album release year without decade-binning—paired with a 6-card KPI summary strip (**Peak Year**, **Weighted Avg Year**, **Listening Age**, **Release Span**, **Active Years**, **Metadata Coverage**), era color coding (1960s through 2020s), exact per-year totals, and **Top Release Years & Signature Albums** cards featuring the top album cover and listening share for your strongest release years.
 
 <p align="center">
   <img src="static/release_years.webp" alt="Unbinned Release Years Distribution" width="820">
@@ -133,22 +133,25 @@ python3 visualize.py
 # Sync a local export folder without generating images
 python3 visualize.py --sync --data-dir "/path/to/listenbrainz_YourName_1794214563"
 
-# Export specific graphics on demand (formats: webp, avif, jpg, jxl)
+# Export specific graphics on demand (formats: webp, avif, jpg, jxl; add --flags for inline country flags)
 python3 visualize.py --collage --limit 51 --formats webp,avif
-python3 visualize.py --map-graphic --formats webp
+python3 visualize.py --map-graphic --pie --formats webp
 python3 visualize.py --years-graphic --formats webp
 
 # Export all 5 showcase graphics at once
-python3 visualize.py --export-all --formats webp
+python3 visualize.py --export-all --formats webp --pie
+
+# Re-verify artist origin countries via ListenBrainz/MusicBrainz APIs
+python3 visualize.py --refresh-countries
 ```
 
 ---
 
 ## Performance & Architecture
 
-- **SQLite Analytics (`db.py`)**: WAL-mode SQLite queries (`listenbrainz.db`) with single-pass aggregations for release years and countries.
+- **SQLite Analytics (`db.py`)**: WAL-mode SQLite queries (`listenbrainz.db`) with single-pass aggregations for release years (including Listening Age) and countries.
 - **Automated Export Client (`listenbrainz_export.py`)**: Async background worker interfacing with `api.listenbrainz.org/1/export/` with masked credential handling, pending-job reuse, rate-limit backoff, and streaming ZIP download.
-- **Parallel Enrichment & Rendering (`importer.py`, `collage_generator.py`)**: `ThreadPoolExecutor` workers parallelize artwork, release-year, and country enrichment; image exports render crisp full-resolution `4:4:4` AVIFs, WebPs, JPGs, and JXLs plus PyMuPDF-rasterized vector SVG maps, pie charts, and flags.
+- **Authoritative Enrichment & Rendering (`importer.py`, `collage_generator.py`)**: Backfills `artist_mbid` metadata, resolves artist countries via ListenBrainz batch `/1/metadata/artist/` + rate-limited MusicBrainz WS2 lookups, parallelizes artwork/year enrichment, and renders editorial `4:4:4` AVIF/WebP/JPG/JXL posters with PyMuPDF-rasterized SVG maps, pie charts, and flags.
 - **Lightweight Frontend (`static/`)**: Vanilla HTML5, CSS3, SVG, and ES6+ JavaScript with zero build step and self-hosted SVG flags (`static/flags/`).
 
 ---

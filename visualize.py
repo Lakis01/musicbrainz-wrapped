@@ -19,9 +19,11 @@ from collage_generator import (
     get_uniform_grid_dims,
     normalize_formats,
 )
-from db import get_overall_stats, get_top_albums, get_top_artists, get_top_tracks
+from db import DB_PATH, get_connection, get_overall_stats, get_top_albums, get_top_artists, get_top_tracks, init_db
 from flags import ensure_flag_assets
 from importer import (
+    backfill_artist_mbids,
+    enrich_all_artist_countries,
     get_active_data_dir,
     load_manual_entries,
     set_active_data_dir,
@@ -65,13 +67,16 @@ def main():
     )
     parser.add_argument("--data-dir", type=str, default=None, help="Path to ListenBrainz export folder or .zip/.tar.gz archive")
     parser.add_argument("--sync", action="store_true", help="Sync latest ListenBrainz export and apply canonicalization")
+    parser.add_argument("--refresh-countries", action="store_true", help="Re-attribute artist countries via MusicBrainz/ListenBrainz APIs (replaces legacy guesses)")
     parser.add_argument("--manual-acid-arab", type=int, default=None, help="Update manual listening estimate (minutes)")
     parser.add_argument("--metric", choices=["minutes", "plays"], default="minutes", help="Count by listen time (minutes) or play count (plays)")
     parser.add_argument("--limit", type=int, default=30, help="Top N count (default: 30)")
     parser.add_argument("--timeframe", default="all", help="Timeframe (e.g. all, 2026, 2025, 2026-8)")
     parser.add_argument("--formats", default="webp", help="Comma-separated output formats: webp,avif,jpg,jxl (default: webp)")
-    parser.add_argument("--flags", dest="show_flags", action="store_true", default=True, help="Include country flags next to artist names (default)")
+    parser.add_argument("--flags", dest="show_flags", action="store_true", default=False, help="Include country flags next to artist names (off by default)")
     parser.add_argument("--no-flags", dest="show_flags", action="store_false", help="Omit country flags from rendered outputs")
+    parser.add_argument("--pie", dest="show_pie", action="store_true", default=False, help="Include country pie chart on world map export")
+    parser.add_argument("--no-pie", dest="show_pie", action="store_false", help="Omit country pie chart from world map export")
     parser.add_argument("--collage", action="store_true", help="Generate album collage image")
     parser.add_argument("--layout", choices=["tiered", "uniform"], default="tiered", help="Collage layout")
     parser.add_argument("--export-all", action="store_true", help="Export Top 101 Collage, Top 50 Artists, and Top 50 Songs")
@@ -100,6 +105,13 @@ def main():
         print(f"\nImporting latest listens from {active_dir or '(none found — place export in ./imports/)'}...")
         sync_res = sync_data(data_dir=active_dir)
         print(f"Sync complete in {sync_res['elapsed_ms']} ms ({sync_res['new_scrobbles']} new listens, {sync_res['total_listens']} total).")
+
+    if args.refresh_countries:
+        init_db(DB_PATH)
+        with get_connection(DB_PATH) as conn:
+            filled = backfill_artist_mbids(conn)
+            updated = enrich_all_artist_countries(conn, limit=500, min_plays=1, refresh_legacy=True, force_refetch=False)
+        print(f"Country refresh complete (backfilled {filled} MBIDs, resolved {updated} artist countries).")
 
     stats = get_overall_stats(timeframe=args.timeframe)
     print("=" * 64)
@@ -135,7 +147,13 @@ def main():
     export_all = args.export_all or args.webp or args.avif
     if export_all and not args.sync:
         print(f"\nExporting all graphics ({', '.join(fmt_list)})...")
-        out = export_all_visuals(timeframe=args.timeframe, metric=args.metric, formats=fmt_list, show_flags=args.show_flags)
+        out = export_all_visuals(
+            timeframe=args.timeframe,
+            metric=args.metric,
+            formats=fmt_list,
+            show_flags=args.show_flags,
+            show_pie=args.show_pie,
+        )
         print("Exported:", out)
 
     if args.artists_table and not export_all and not args.sync:
@@ -165,6 +183,7 @@ def main():
             metric=args.metric,
             timeframe=args.timeframe,
             output_path=os.path.join("static", "world_map"),
+            show_pie=args.show_pie,
             show_flags=args.show_flags,
             formats=fmt_list,
         )

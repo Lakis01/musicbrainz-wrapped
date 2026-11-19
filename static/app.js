@@ -9,7 +9,7 @@ document.addEventListener("DOMContentLoaded", () => {
         limit: 31,
         layout: "tiered",
         showCaptions: true,
-        showFlags: true,
+        showFlags: false,
         yearsMode: "active",
         selectedYear: null,
         mapRankBy: "metric",
@@ -95,6 +95,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnExportSongs = document.getElementById("btn-export-songs");
     const btnExportYears = document.getElementById("btn-export-years");
     const btnExportMap = document.getElementById("btn-export-map");
+    const btnExportAll = document.getElementById("btn-export-all");
     const exportFormatGroup = document.getElementById("export-format-group");
     const exportResultLinks = document.getElementById("export-result-links");
     const chkJxlWrap = document.getElementById("chk-jxl-wrap");
@@ -307,6 +308,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const targetEl = document.getElementById(targetTab);
                 if (targetEl) targetEl.classList.add("active");
                 mapTooltip.style.display = "none";
+                exportResultLinks.innerHTML = "";
             });
         });
     }
@@ -317,7 +319,18 @@ document.addEventListener("DOMContentLoaded", () => {
             const cfg = await res.json();
             state.config = cfg;
 
-            activeUsernameEl.textContent = cfg.username || "Listener";
+            const rawUser = (cfg.username || "").trim();
+            const displayUser = rawUser || "Listener";
+            activeUsernameEl.textContent = displayUser;
+            if (rawUser && !["listener", "unknown"].includes(rawUser.toLowerCase())) {
+                activeUsernameEl.href = `https://listenbrainz.org/user/${encodeURIComponent(rawUser)}`;
+                activeUsernameEl.title = `Open ${rawUser}'s ListenBrainz profile`;
+                activeUsernameEl.classList.remove("disabled-link");
+            } else {
+                activeUsernameEl.removeAttribute("href");
+                activeUsernameEl.removeAttribute("title");
+                activeUsernameEl.classList.add("disabled-link");
+            }
             if (cfg.data_dir) {
                 const folderName = cfg.data_dir.split(/[\\/]/).filter(Boolean).pop() || cfg.data_dir;
                 activeFolderEl.textContent = folderName;
@@ -793,7 +806,7 @@ document.addEventListener("DOMContentLoaded", () => {
         `;
     }
 
-    async function runImageExport(btn, urlBuilder) {
+    async function runImageExport(btn, urlBuilder, sectionLabel = "") {
         const formats = getSelectedFormats();
         const origHtml = btn.innerHTML;
         btn.textContent = `Exporting (${formats.join(", ").toUpperCase()})...`;
@@ -807,11 +820,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 throw new Error(data.error || "Export failed");
             }
             const files = data.files || (data.url ? [{ format: formats[0], url: data.url, filename: data.url.split("/").pop() }] : []);
-            exportResultLinks.innerHTML = files.map(f =>
-                `<a class="export-file-chip" href="${escapeHtml(f.url)}" download="${escapeHtml(f.filename)}">Download ${escapeHtml(f.format.toUpperCase())}</a>`
-            ).join("");
+            exportResultLinks.innerHTML = files.map(f => {
+                const chipLabel = f.format === "zip"
+                    ? `${sectionLabel || "All Graphics"} (ZIP)`
+                    : (sectionLabel ? `${sectionLabel} · ${f.format.toUpperCase()}` : `Download ${f.format.toUpperCase()}`);
+                return `<a class="export-file-chip" href="${escapeHtml(f.url)}" download="${escapeHtml(f.filename)}">${escapeHtml(chipLabel)}</a>`;
+            }).join("");
 
-            // Trigger download for first file automatically; show chips for all generated formats
+            // Trigger download for generated file(s) automatically; show chips for all generated formats
             files.forEach((f, idx) => {
                 setTimeout(() => {
                     const link = document.createElement("a");
@@ -907,32 +923,53 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         });
 
+        state.showFlags = Boolean(chkIncludeFlags && chkIncludeFlags.checked);
+        state.showCountryPie = Boolean(chkCountryPie && chkCountryPie.checked);
+        if (countryPieCard) countryPieCard.classList.toggle("hidden", !state.showCountryPie);
+        if (countryInsightsGrid) countryInsightsGrid.classList.toggle("with-pie", state.showCountryPie);
+
         syncLimitDropdown();
         updateExportButtonText();
+
+        if (btnExportAll) {
+            btnExportAll.addEventListener("click", () => {
+                const targetLimit = state.layout === "tiered" ? calculateTieredLimit(state.limit) : state.limit;
+                runImageExport(
+                    btnExportAll,
+                    formats =>
+                        `/api/generate-all?layout=${state.layout}&limit=${targetLimit}&metric=${state.metric}&formats=${formats.join(",")}&captions=${state.showCaptions ? 1 : 0}&flags=${state.showFlags ? 1 : 0}&years_mode=${state.yearsMode}&rank_by=${state.mapRankBy}&top_x=${state.countryTopX}&pie=${state.showCountryPie ? 1 : 0}${timeQuery()}`,
+                    "All Graphics"
+                );
+            });
+        }
 
         btnDownloadCollage.addEventListener("click", () => {
             const targetLimit = state.layout === "tiered" ? calculateTieredLimit(state.limit) : state.limit;
             runImageExport(btnDownloadCollage, formats =>
-                `/api/generate-collage?layout=${state.layout}&limit=${targetLimit}&metric=${state.metric}&formats=${formats.join(",")}&captions=${state.showCaptions ? 1 : 0}&flags=${state.showFlags ? 1 : 0}${timeQuery()}`
+                `/api/generate-collage?layout=${state.layout}&limit=${targetLimit}&metric=${state.metric}&formats=${formats.join(",")}&captions=${state.showCaptions ? 1 : 0}&flags=${state.showFlags ? 1 : 0}${timeQuery()}`,
+                "Album Collage"
             );
         });
 
         btnExportArtists.addEventListener("click", () => {
             runImageExport(btnExportArtists, formats =>
-                `/api/generate-table?type=artists&limit=50&metric=${state.metric}&formats=${formats.join(",")}&flags=${state.showFlags ? 1 : 0}${timeQuery()}`
+                `/api/generate-table?type=artists&limit=50&metric=${state.metric}&formats=${formats.join(",")}&flags=${state.showFlags ? 1 : 0}${timeQuery()}`,
+                "Top Artists"
             );
         });
 
         btnExportSongs.addEventListener("click", () => {
             runImageExport(btnExportSongs, formats =>
-                `/api/generate-table?type=songs&limit=50&metric=${state.metric}&formats=${formats.join(",")}&flags=${state.showFlags ? 1 : 0}${timeQuery()}`
+                `/api/generate-table?type=songs&limit=50&metric=${state.metric}&formats=${formats.join(",")}&flags=${state.showFlags ? 1 : 0}${timeQuery()}`,
+                "Top Songs"
             );
         });
 
         if (btnExportYears) {
             btnExportYears.addEventListener("click", () => {
                 runImageExport(btnExportYears, formats =>
-                    `/api/generate-years?metric=${state.metric}&mode=${state.yearsMode}&formats=${formats.join(",")}${timeQuery()}`
+                    `/api/generate-years?metric=${state.metric}&mode=${state.yearsMode}&formats=${formats.join(",")}${timeQuery()}`,
+                    "Release Years"
                 );
             });
         }
@@ -940,7 +977,8 @@ document.addEventListener("DOMContentLoaded", () => {
         if (btnExportMap) {
             btnExportMap.addEventListener("click", () => {
                 runImageExport(btnExportMap, formats =>
-                    `/api/generate-map?metric=${state.metric}&rank_by=${state.mapRankBy}&top_x=${state.countryTopX}&pie=${state.showCountryPie ? 1 : 0}&flags=${state.showFlags ? 1 : 0}&formats=${formats.join(",")}${timeQuery()}`
+                    `/api/generate-map?metric=${state.metric}&rank_by=${state.mapRankBy}&top_x=${state.countryTopX}&pie=${state.showCountryPie ? 1 : 0}&flags=${state.showFlags ? 1 : 0}&formats=${formats.join(",")}${timeQuery()}`,
+                    "World Map"
                 );
             });
         }
@@ -964,6 +1002,7 @@ document.addEventListener("DOMContentLoaded", () => {
             btnMapModeMetric.classList.add("active");
             btnMapModeArtists.classList.remove("active");
             renderWorldMap(state.countryStats);
+            if (state.showCountryPie) renderCountryPieChart(state.countryStats);
         });
 
         btnMapModeArtists.addEventListener("click", () => {
@@ -971,6 +1010,7 @@ document.addEventListener("DOMContentLoaded", () => {
             btnMapModeArtists.classList.add("active");
             btnMapModeMetric.classList.remove("active");
             renderWorldMap(state.countryStats);
+            if (state.showCountryPie) renderCountryPieChart(state.countryStats);
         });
 
         countryTopXSelect.addEventListener("change", e => {
@@ -983,7 +1023,10 @@ document.addEventListener("DOMContentLoaded", () => {
             state.showCountryPie = e.target.checked;
             countryPieCard.classList.toggle("hidden", !state.showCountryPie);
             countryInsightsGrid.classList.toggle("with-pie", state.showCountryPie);
-            if (state.showCountryPie) renderCountryPieChart(state.countryStats);
+            if (state.showCountryPie) {
+                renderCountryPieChart(state.countryStats);
+                countryPieCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            }
         });
 
         btnSyncData.addEventListener("click", async () => {
@@ -1592,7 +1635,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 </div>
                 <div class="row-main-cell">
                     <div class="item-primary-text"><span class="truncate-name">${escapeHtml(album.release_name)}</span></div>
-                    <div class="item-secondary-text">
+                    <div class="item-secondary-text row-mobile-only">
                         <span>${escapeHtml(album.artist_name)}</span>${flag}
                         ${album.original_release_year ? `<span class="tag-badge">${album.original_release_year}</span>` : ""}
                     </div>
@@ -1743,6 +1786,20 @@ document.addEventListener("DOMContentLoaded", () => {
             ? `${summary.peak_year} (${isMin ? `${Math.round(summary.peak_minutes)}m` : `${summary.peak_plays}p`})`
             : "--";
         document.getElementById("yr-kpi-mean").textContent = summary.weighted_avg_year ? `${summary.weighted_avg_year}` : "--";
+        const ageEl = document.getElementById("yr-kpi-age");
+        const ageSubEl = document.getElementById("yr-kpi-age-sub");
+        const ageCardEl = document.getElementById("yr-kpi-age-card");
+        if (ageEl) {
+            ageEl.textContent = summary.listening_age ? `${summary.listening_age} yrs` : "--";
+        }
+        if (ageSubEl) {
+            ageSubEl.textContent = summary.weighted_avg_year
+                ? `From avg. ${summary.weighted_avg_year}`
+                : "No release year data";
+        }
+        if (ageCardEl && summary.weighted_avg_year) {
+            ageCardEl.title = `Estimated from weighted average release year (${summary.weighted_avg_year}), assuming formative musical taste peaks around age ${summary.listening_age_anchor || 18}.`;
+        }
         document.getElementById("yr-kpi-span").textContent = summary.earliest_year ? `${summary.earliest_year} – ${summary.latest_year}` : "--";
         document.getElementById("yr-kpi-count").textContent = summary.active_years_count ? `${summary.active_years_count} years` : "--";
         document.getElementById("yr-kpi-coverage").textContent = `${summary.coverage_pct || 0}%`;
@@ -2070,13 +2127,19 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
         const isMin = state.metric === "minutes";
+        const isArtistsPie = state.mapRankBy === "artists";
+        const pieTagEl = document.getElementById("country-pie-tag");
+        if (pieTagEl) {
+            pieTagEl.textContent = isArtistsPie ? "Artist Count" : (isMin ? "Listen Time" : "No. of Listens");
+        }
         const topX = state.countryTopX >= 999 ? Math.min(12, countries.length) : Math.min(state.countryTopX, countries.length);
         const topSlice = countries.slice(0, topX);
         const restSlice = countries.slice(topX);
 
-        const totalVal = countries.reduce((acc, c) => acc + (isMin ? c.minutes_listened : c.play_count), 0) || 1;
+        const getVal = c => (isArtistsPie ? c.artist_count : (isMin ? c.minutes_listened : c.play_count));
+        const totalVal = countries.reduce((acc, c) => acc + getVal(c), 0) || 1;
         const segments = topSlice.map((c, idx) => {
-            const val = isMin ? c.minutes_listened : c.play_count;
+            const val = getVal(c);
             return {
                 label: c.country_name,
                 code: c.country_code,
@@ -2086,7 +2149,7 @@ document.addEventListener("DOMContentLoaded", () => {
             };
         });
 
-        const restVal = restSlice.reduce((acc, c) => acc + (isMin ? c.minutes_listened : c.play_count), 0);
+        const restVal = restSlice.reduce((acc, c) => acc + getVal(c), 0);
         if (restVal > 0) {
             segments.push({
                 label: `Other (${restSlice.length} countries)`,
@@ -2131,8 +2194,11 @@ document.addEventListener("DOMContentLoaded", () => {
             return `<path d="${d}" fill="${seg.color}" stroke="#090d16" stroke-width="1.5" class="pie-slice" data-idx="${idx}"/>`;
         }).join("");
 
-        const centerText = isMin ? `${Math.round(totalVal / 60)}h` : `${totalVal.toLocaleString()}`;
-        const centerSub = isMin ? "attributed" : "listens";
+        const centerText = isArtistsPie
+            ? `${totalVal.toLocaleString()}`
+            : (isMin ? `${Math.round(totalVal / 60)}h` : `${totalVal.toLocaleString()}`);
+        const centerSub = isArtistsPie ? "artists" : (isMin ? "attributed" : "listens");
+        const unitSuffix = isArtistsPie ? "a" : (isMin ? "m" : "p");
 
         const legendHtml = segments.map(seg => `
             <div class="pie-legend-item">
@@ -2141,7 +2207,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     ${seg.code !== "XX" ? flagHtml(seg.code, seg.label) : ""}
                     <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(seg.label)}</span>
                 </div>
-                <div class="pie-legend-val">${seg.pct.toFixed(1)}% (${isMin ? `${Math.round(seg.val)}m` : `${seg.val}p`})</div>
+                <div class="pie-legend-val">${seg.pct.toFixed(1)}% (${Math.round(seg.val)}${unitSuffix})</div>
             </div>
         `).join("");
 
@@ -2158,12 +2224,15 @@ document.addEventListener("DOMContentLoaded", () => {
             const seg = segments[parseInt(el.getAttribute("data-idx"), 10)];
             if (!seg) return;
             el.addEventListener("mouseenter", () => {
+                const tipMetric = isArtistsPie
+                    ? `${seg.val.toLocaleString()} artists`
+                    : (isMin ? `${Math.round(seg.val).toLocaleString()} mins` : `${seg.val.toLocaleString()} listens`);
                 mapTooltip.innerHTML = `
                     <div style="font-weight:700;display:flex;align-items:center;gap:6px;">
                         ${seg.code !== "XX" ? flagHtml(seg.code, seg.label) : ""}
                         <span>${escapeHtml(seg.label)}</span>
                     </div>
-                    <div style="margin-top:3px;color:#7dd3fc;font-family:var(--font-mono);">${seg.pct.toFixed(1)}% • ${isMin ? `${Math.round(seg.val).toLocaleString()} mins` : `${seg.val.toLocaleString()} listens`}</div>
+                    <div style="margin-top:3px;color:#7dd3fc;font-family:var(--font-mono);">${seg.pct.toFixed(1)}% • ${tipMetric}</div>
                 `;
                 mapTooltip.style.display = "block";
             });

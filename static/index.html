@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MusicBrainz Wrapped — Unofficial Local Listening Analytics</title>
+    <title>MusicBrainz Wrapped — Local Listening Analytics</title>
     <link rel="icon" type="image/webp" href="/logo.webp">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -12,14 +12,6 @@
 </head>
 <body>
     <div class="app-container">
-        <!-- Unofficial Notice Strip -->
-        <div class="unofficial-banner" role="note">
-            <span class="unofficial-pill">Unofficial Community Tool</span>
-            <span class="unofficial-copy">
-                Not affiliated with or endorsed by MusicBrainz, ListenBrainz, or the MetaBrainz Foundation.
-            </span>
-        </div>
-
         <!-- Top Navigation Header -->
         <header class="top-nav">
             <div class="brand">
@@ -29,7 +21,7 @@
                 <div class="brand-text">
                     <h1>MusicBrainz Wrapped</h1>
                     <p class="user-tag">
-                        User: <strong id="active-username">Listener</strong>
+                        User: <a id="active-username" class="user-profile-link disabled-link" target="_blank" rel="noopener noreferrer">Listener</a>
                         <span class="sep">•</span>
                         <span id="active-folder-label" class="folder-label">Scanning...</span>
                         <span class="sep">•</span>
@@ -69,7 +61,7 @@
                 </div>
 
                 <label class="toggle-chip" for="chk-include-flags" title="Display country flags inline next to artist names and in image exports">
-                    <input type="checkbox" id="chk-include-flags" checked>
+                    <input type="checkbox" id="chk-include-flags" autocomplete="off">
                     <span>Include Flags</span>
                 </label>
 
@@ -234,7 +226,13 @@
                         <label class="format-check" id="chk-jxl-wrap"><input type="checkbox" value="jxl"><span>JXL</span></label>
                     </div>
                 </div>
-                <div class="export-result-links" id="export-result-links"></div>
+                <div class="formats-bar-right">
+                    <div class="export-result-links" id="export-result-links"></div>
+                    <button class="btn-primary btn-export-all" id="btn-export-all" type="button" title="Export all 5 graphics (Album Collage, Top Artists, Top Songs, Release Years, World Map) in ticked formats as a ZIP">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        Export All Graphics
+                    </button>
+                </div>
             </section>
 
             <!-- Navigation Tabs -->
@@ -247,13 +245,13 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
                     Top Artists
                 </button>
-                <button class="tab-btn" data-tab="tab-albums" type="button">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="3"></circle></svg>
-                    Top Albums
-                </button>
                 <button class="tab-btn" data-tab="tab-songs" type="button">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
                     Top Songs
+                </button>
+                <button class="tab-btn" data-tab="tab-albums" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="3"></circle></svg>
+                    Top Albums
                 </button>
                 <button class="tab-btn" data-tab="tab-years" type="button">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
@@ -334,34 +332,7 @@
                 </div>
             </section>
 
-            <!-- Tab 3: Top Albums Leaderboard -->
-            <section class="tab-content" id="tab-albums">
-                <div class="section-header">
-                    <div>
-                        <h2>Top Albums Leaderboard</h2>
-                        <p class="section-subtitle">Original release years and covers. Click any album for track breakdown.</p>
-                    </div>
-                    <div class="search-box">
-                        <input type="text" id="filter-albums-input" placeholder="Search albums, artists, or years...">
-                    </div>
-                </div>
-
-                <div class="leaderboard-container">
-                    <div class="leaderboard-table-header album-grid-header">
-                        <span class="col-rank sortable" data-sort="rank"># <span class="sort-icon"></span></span>
-                        <span class="col-cover">Cover</span>
-                        <span class="col-album-title sortable" data-sort="title">Album Title <span class="sort-icon"></span></span>
-                        <span class="col-album-artist sortable" data-sort="artist">Artist <span class="sort-icon"></span></span>
-                        <span class="col-year sortable" data-sort="year">Year <span class="sort-icon"></span></span>
-                        <span class="col-stat sortable active" data-sort="minutes" id="album-header-stat">Listen Time <span class="sort-icon">▼</span></span>
-                        <span class="col-plays sortable" data-sort="plays">Listens <span class="sort-icon"></span></span>
-                        <span class="col-hours sortable" data-sort="hours">Hours <span class="sort-icon"></span></span>
-                    </div>
-                    <div id="albums-list-container" class="leaderboard-list"></div>
-                </div>
-            </section>
-
-            <!-- Tab 4: Top Songs (Wrapped Podium & Visual Metric Bars) -->
+            <!-- Tab 3: Top Songs (Wrapped Podium & Visual Metric Bars) -->
             <section class="tab-content" id="tab-songs">
                 <div class="section-header">
                     <div>
@@ -389,6 +360,33 @@
                         <button class="sort-chip sortable" data-sort="title" type="button">Title <span class="sort-icon"></span></button>
                     </div>
                     <div id="songs-list-container" class="wrapped-bars-list"></div>
+                </div>
+            </section>
+
+            <!-- Tab 4: Top Albums Leaderboard -->
+            <section class="tab-content" id="tab-albums">
+                <div class="section-header">
+                    <div>
+                        <h2>Top Albums Leaderboard</h2>
+                        <p class="section-subtitle">Original release years and covers. Click any album for track breakdown.</p>
+                    </div>
+                    <div class="search-box">
+                        <input type="text" id="filter-albums-input" placeholder="Search albums, artists, or years...">
+                    </div>
+                </div>
+
+                <div class="leaderboard-container">
+                    <div class="leaderboard-table-header album-grid-header">
+                        <span class="col-rank sortable" data-sort="rank"># <span class="sort-icon"></span></span>
+                        <span class="col-cover">Cover</span>
+                        <span class="col-album-title sortable" data-sort="title">Album Title <span class="sort-icon"></span></span>
+                        <span class="col-album-artist sortable" data-sort="artist">Artist <span class="sort-icon"></span></span>
+                        <span class="col-year sortable" data-sort="year">Year <span class="sort-icon"></span></span>
+                        <span class="col-stat sortable active" data-sort="minutes" id="album-header-stat">Listen Time <span class="sort-icon">▼</span></span>
+                        <span class="col-plays sortable" data-sort="plays">Listens <span class="sort-icon"></span></span>
+                        <span class="col-hours sortable" data-sort="hours">Hours <span class="sort-icon"></span></span>
+                    </div>
+                    <div id="albums-list-container" class="leaderboard-list"></div>
                 </div>
             </section>
 
@@ -420,6 +418,11 @@
                     <div class="mini-kpi">
                         <span class="mini-kpi-label">Weighted Avg Year</span>
                         <span class="mini-kpi-value" id="yr-kpi-mean">--</span>
+                    </div>
+                    <div class="mini-kpi mini-kpi-accent" id="yr-kpi-age-card" title="Estimated musical age based on weighted average release year (reminiscence bump anchor: age 18)">
+                        <span class="mini-kpi-label">Listening Age</span>
+                        <span class="mini-kpi-value" id="yr-kpi-age">--</span>
+                        <span class="mini-kpi-sub" id="yr-kpi-age-sub">Reminiscence bump est.</span>
                     </div>
                     <div class="mini-kpi">
                         <span class="mini-kpi-label">Release Span</span>
@@ -500,8 +503,8 @@
                             </select>
                         </div>
                         <label class="toggle-chip" for="chk-country-pie">
-                            <input type="checkbox" id="chk-country-pie">
-                            <span>Country Pie Chart</span>
+                            <input type="checkbox" id="chk-country-pie" autocomplete="off">
+                            <span>Include Pie Chart</span>
                         </label>
                         <button class="btn-primary" id="btn-export-map" type="button" title="Export World Map & Country Breakdown Graphic in ticked formats">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
@@ -598,8 +601,7 @@
 
         <footer class="app-footer">
             <p>
-                <strong>MusicBrainz Wrapped (Unofficial)</strong> — independent local community tool, not endorsed by or affiliated with MusicBrainz, ListenBrainz, or the MetaBrainz Foundation.
-                Data stays 100% on your machine in SQLite.
+                <strong>MusicBrainz Wrapped</strong> — 100% local SQLite listening analytics.
             </p>
         </footer>
     </div>

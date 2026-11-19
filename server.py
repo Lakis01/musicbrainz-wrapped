@@ -11,6 +11,7 @@ import sys
 import tempfile
 import uuid
 import urllib.parse
+import zipfile
 from typing import Any, Dict, List
 
 from collage_generator import (
@@ -114,6 +115,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
         ".jxl": "image/jxl",
         ".svg": "image/svg+xml",
         ".json": "application/json",
+        ".zip": "application/zip",
     })
 
     def __init__(self, *args, **kwargs):
@@ -359,7 +361,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             raw_formats = params.get("formats", [params.get("format", ["webp"])[0]])[0]
             fmt_list = normalize_formats(raw_formats.split(","))
             show_captions = params.get("captions", ["1"])[0] in ("1", "true", "yes")
-            show_flags = params.get("flags", ["1"])[0] in ("1", "true", "yes")
+            show_flags = params.get("flags", ["0"])[0] in ("1", "true", "yes")
             flag_tag = "flags" if show_flags else "noflags"
             cap_tag = "cap" if show_captions else "nocap"
             stem_name = f"collage_{layout}_{metric}_{timeframe}_{limit}_{cap_tag}_{flag_tag}"
@@ -405,7 +407,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             table_type = params.get("type", ["artists"])[0]
             raw_formats = params.get("formats", [params.get("format", ["webp"])[0]])[0]
             fmt_list = normalize_formats(raw_formats.split(","))
-            show_flags = params.get("flags", ["1"])[0] in ("1", "true", "yes")
+            show_flags = params.get("flags", ["0"])[0] in ("1", "true", "yes")
             flag_tag = "flags" if show_flags else "noflags"
             stem_name = f"table_{table_type}_{metric}_{timeframe}_{limit}_{flag_tag}"
             job_id, stem_path = _allocate_transient_stem(stem_name)
@@ -446,7 +448,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
         elif path == "/api/generate-map":
             raw_formats = params.get("formats", [params.get("format", ["webp"])[0]])[0]
             fmt_list = normalize_formats(raw_formats.split(","))
-            show_flags = params.get("flags", ["1"])[0] in ("1", "true", "yes")
+            show_flags = params.get("flags", ["0"])[0] in ("1", "true", "yes")
             rank_by = params.get("rank_by", ["metric"])[0]
             if rank_by not in ("metric", "artists"):
                 rank_by = "metric"
@@ -511,6 +513,134 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 "url": files[0]["url"] if files else None,
                 "files": files,
             }
+        elif path == "/api/generate-all":
+            raw_formats = params.get("formats", [params.get("format", ["webp"])[0]])[0]
+            fmt_list = normalize_formats(raw_formats.split(","))
+            layout = params.get("layout", ["tiered"])[0]
+            show_captions = params.get("captions", ["1"])[0] in ("1", "true", "yes")
+            show_flags = params.get("flags", ["0"])[0] in ("1", "true", "yes")
+            years_mode = params.get("years_mode", ["active"])[0]
+            if years_mode not in ("active", "continuous"):
+                years_mode = "active"
+            rank_by = params.get("rank_by", ["metric"])[0]
+            if rank_by not in ("metric", "artists"):
+                rank_by = "metric"
+            try:
+                top_x = max(1, min(999, int(params.get("top_x", ["5"])[0])))
+            except ValueError:
+                top_x = 5
+            show_pie = params.get("pie", ["0"])[0] in ("1", "true", "yes")
+
+            flag_tag = "flags" if show_flags else "noflags"
+            cap_tag = "cap" if show_captions else "nocap"
+            job_id, first_stem = _allocate_transient_stem(f"album_collage_{layout}_{metric}_{timeframe}_{limit}_{cap_tag}_{flag_tag}")
+            job_dir = os.path.dirname(first_stem)
+
+            all_saved: List[str] = []
+            try:
+                if layout == "tiered":
+                    c_paths = generate_tiered_collage(
+                        limit=limit,
+                        metric=metric,
+                        timeframe=timeframe,
+                        start_ts=start_ts,
+                        end_ts=end_ts,
+                        output_path=first_stem,
+                        show_captions=show_captions,
+                        show_flags=show_flags,
+                        formats=fmt_list,
+                    )
+                else:
+                    cols, rows = get_uniform_grid_dims(limit)
+                    c_paths = generate_uniform_collage(
+                        grid_size=(cols, rows),
+                        metric=metric,
+                        timeframe=timeframe,
+                        start_ts=start_ts,
+                        end_ts=end_ts,
+                        output_path=first_stem,
+                        show_captions=show_captions,
+                        show_flags=show_flags,
+                        formats=fmt_list,
+                    )
+                if c_paths:
+                    all_saved.extend(c_paths)
+
+                a_paths = generate_artists_table_image(
+                    limit=50,
+                    metric=metric,
+                    timeframe=timeframe,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    output_path=os.path.join(job_dir, f"top_50_artists_{metric}_{timeframe}_{flag_tag}"),
+                    show_flags=show_flags,
+                    formats=fmt_list,
+                )
+                if a_paths:
+                    all_saved.extend(a_paths)
+
+                s_paths = generate_songs_table_image(
+                    limit=50,
+                    metric=metric,
+                    timeframe=timeframe,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    output_path=os.path.join(job_dir, f"top_50_songs_{metric}_{timeframe}_{flag_tag}"),
+                    show_flags=show_flags,
+                    formats=fmt_list,
+                )
+                if s_paths:
+                    all_saved.extend(s_paths)
+
+                y_paths = generate_release_years_image(
+                    metric=metric,
+                    mode=years_mode,
+                    timeframe=timeframe,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    output_path=os.path.join(job_dir, f"release_years_{metric}_{years_mode}_{timeframe}"),
+                    formats=fmt_list,
+                )
+                if y_paths:
+                    all_saved.extend(y_paths)
+
+                m_paths = generate_world_map_image(
+                    metric=metric,
+                    rank_by=rank_by,
+                    top_x=top_x,
+                    show_pie=show_pie,
+                    show_flags=show_flags,
+                    timeframe=timeframe,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    output_path=os.path.join(job_dir, f"world_map_{metric}_{rank_by}_{timeframe}_top{top_x}_{flag_tag}"),
+                    formats=fmt_list,
+                )
+                if m_paths:
+                    all_saved.extend(m_paths)
+            except Exception as exc:
+                self._send_json({"success": False, "error": str(exc)}, status=500)
+                return
+
+            if not all_saved:
+                self._send_json({"success": False, "error": "No graphics could be generated for the selected timeframe."}, status=400)
+                return
+
+            zip_name = f"musicbrainz_wrapped_all_{metric}_{timeframe}.zip"
+            zip_path = os.path.join(job_dir, zip_name)
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as zf:
+                for p in all_saved:
+                    if os.path.isfile(p):
+                        zf.write(p, arcname=os.path.basename(p))
+
+            zip_entry = _format_transient_files(job_id, [zip_path])[0]
+            response_data = {
+                "success": True,
+                "url": zip_entry["url"],
+                "zip": zip_entry,
+                "files": [zip_entry],
+                "count": len(all_saved),
+            }
         else:
             self._send_json({"error": "Endpoint not found"}, status=404)
             return
@@ -524,7 +654,8 @@ def run(port: int = PORT) -> None:
     http.server.ThreadingHTTPServer.allow_reuse_address = True
     httpd = http.server.ThreadingHTTPServer(("", port), CustomHandler)
     httpd.daemon_threads = True
-    print(f"Unofficial MusicBrainz Wrapped running at http://localhost:{port}")
+    print("MusicBrainz Wrapped (Unofficial community tool — not affiliated with MusicBrainz, ListenBrainz, or MetaBrainz)")
+    print(f"Local dashboard running at http://localhost:{port}")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

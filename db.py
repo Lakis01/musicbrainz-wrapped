@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "listenbrainz.db")
+REMINISCENCE_BUMP_AGE = 18
 
 UNIFIED_COLLABORATIONS = {
     "will ramos & nik nocturnal",
@@ -114,9 +115,13 @@ def init_db(db_path: str = DB_PATH) -> None:
             image_fetched INTEGER DEFAULT 0,
             country_code TEXT,
             country_name TEXT,
-            country_fetched INTEGER DEFAULT 0
+            country_fetched INTEGER DEFAULT 0,
+            country_source TEXT
         )
         """)
+        artist_cols = {c[1] for c in cursor.execute("PRAGMA table_info(artists)").fetchall()}
+        if "country_source" not in artist_cols:
+            cursor.execute("ALTER TABLE artists ADD COLUMN country_source TEXT")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_artists_country ON artists(country_code)")
 
         cursor.execute("""
@@ -797,6 +802,13 @@ def get_release_years_stats(
             else (round((with_year_plays / total_all_plays) * 100.0, 1) if total_all_plays > 0 else 0.0)
         )
 
+        weighted_avg_year = round(weighted_sum / weighted_denom, 1) if weighted_denom > 0 else None
+        listening_age = (
+            max(13, int(round(datetime.now().year - weighted_avg_year + REMINISCENCE_BUMP_AGE)))
+            if weighted_avg_year is not None
+            else None
+        )
+
         summary = {
             "earliest_year": min(year_data_map.keys()) if year_data_map else None,
             "latest_year": max(year_data_map.keys()) if year_data_map else None,
@@ -804,7 +816,9 @@ def get_release_years_stats(
             "peak_year": peak_row["year"] if peak_row else None,
             "peak_minutes": peak_row["minutes_listened"] if peak_row else 0,
             "peak_plays": peak_row["play_count"] if peak_row else 0,
-            "weighted_avg_year": round(weighted_sum / weighted_denom, 1) if weighted_denom > 0 else None,
+            "weighted_avg_year": weighted_avg_year,
+            "listening_age": listening_age,
+            "listening_age_anchor": REMINISCENCE_BUMP_AGE,
             "coverage_pct": cov_pct,
             "with_year_hours": round(with_year_ms / 3600000.0, 1),
             "without_year_hours": round(max(0, total_all_ms - with_year_ms) / 3600000.0, 1),

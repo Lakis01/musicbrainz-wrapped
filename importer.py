@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter, defaultdict
+import functools
 import glob
 import hashlib
 import json
@@ -10,13 +12,15 @@ import re
 import shutil
 import subprocess
 import tarfile
+import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from db import DB_PATH, get_connection, init_db, split_artist_names
 
@@ -25,7 +29,12 @@ DATA_SUBDIR = os.path.join(BASE_DIR, "data")
 CONFIG_PATH = os.path.join(DATA_SUBDIR, "config.json")
 IMPORTS_DIR = os.path.join(BASE_DIR, "imports")
 STATIC_CACHE_DIR = os.path.join(BASE_DIR, "static", "cache")
-USER_AGENT = "ListenBrainzLocalVisualizer/2.0 (unofficial-community-tool)"
+WORLD_COUNTRIES_PATH = os.path.join(BASE_DIR, "static", "world_countries.json")
+USER_AGENT = "MusicBrainzWrapped/2.0 (https://github.com/Lakis01/musicbrainz-wrapped)"
+
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+_MB_LOCK = threading.Lock()
+_MB_LAST_REQ = 0.0
 
 
 def is_valid_export_dir(path: Optional[str]) -> bool:
@@ -272,6 +281,14 @@ def get_latest_data_dir() -> Optional[str]:
 
 
 DATA_DIR = get_active_data_dir()
+
+COLLAB_ARTIST_COUNTRIES = {
+    "Will Ramos & Nik Nocturnal": ("US", "United States"),
+    "Milton Nascimento & Lô Borges": ("BR", "Brazil"),
+    "Milton Nascimento • Lô Borges": ("BR", "Brazil"),
+    "Shye Ben Tzur, Jonny Greenwood and The Rajasthan Express": ("IN", "India"),
+    "Lana Del Rey with Adam Cohen": ("US", "United States"),
+}
 
 KNOWN_ARTIST_COUNTRIES = {
     "Tool": ("US", "United States"),
@@ -640,58 +657,145 @@ CUSTOM_ALBUM_URLS = {
     ("Shye Ben Tzur, Jonny Greenwood and The Rajasthan Express", "Junun"): "https://cdn-images.dzcdn.net/images/cover/03efcfef9b37e740a9e63810fa872d3b/500x500-000000-80-0-0.jpg",
 }
 
-DEMONYM_MAP = {
-    "american": ("US", "United States"), "united states": ("US", "United States"), "u.s.": ("US", "United States"), "usa": ("US", "United States"),
-    "california": ("US", "United States"), "new york": ("US", "United States"), "texas": ("US", "United States"), "los angeles": ("US", "United States"), "chicago": ("US", "United States"), "atlanta": ("US", "United States"), "nashville": ("US", "United States"), "seattle": ("US", "United States"), "boston": ("US", "United States"),
-    "british": ("GB", "United Kingdom"), "english": ("GB", "United Kingdom"), "scottish": ("GB", "United Kingdom"), "welsh": ("GB", "United Kingdom"), "uk": ("GB", "United Kingdom"), "united kingdom": ("GB", "United Kingdom"), "london": ("GB", "United Kingdom"), "manchester": ("GB", "United Kingdom"), "birmingham": ("GB", "United Kingdom"), "liverpool": ("GB", "United Kingdom"), "glasgow": ("GB", "United Kingdom"), "edinburgh": ("GB", "United Kingdom"),
-    "canadian": ("CA", "Canada"), "canada": ("CA", "Canada"), "toronto": ("CA", "Canada"), "montreal": ("CA", "Canada"), "vancouver": ("CA", "Canada"), "quebec": ("CA", "Canada"), "ottawa": ("CA", "Canada"), "calgary": ("CA", "Canada"),
-    "australian": ("AU", "Australia"), "australia": ("AU", "Australia"), "melbourne": ("AU", "Australia"), "sydney": ("AU", "Australia"), "perth": ("AU", "Australia"), "brisbane": ("AU", "Australia"), "adelaide": ("AU", "Australia"),
-    "german": ("DE", "Germany"), "germany": ("DE", "Germany"), "berlin": ("DE", "Germany"), "munich": ("DE", "Germany"), "hamburg": ("DE", "Germany"), "cologne": ("DE", "Germany"), "frankfurt": ("DE", "Germany"), "leipzig": ("DE", "Germany"),
-    "austrian": ("AT", "Austria"), "austria": ("AT", "Austria"), "vienna": ("AT", "Austria"), "salzburg": ("AT", "Austria"), "graz": ("AT", "Austria"),
-    "french": ("FR", "France"), "france": ("FR", "France"), "paris": ("FR", "France"), "marseille": ("FR", "France"), "lyon": ("FR", "France"),
-    "italian": ("IT", "Italy"), "italy": ("IT", "Italy"), "rome": ("IT", "Italy"), "milan": ("IT", "Italy"), "naples": ("IT", "Italy"), "turin": ("IT", "Italy"),
-    "swedish": ("SE", "Sweden"), "sweden": ("SE", "Sweden"), "stockholm": ("SE", "Sweden"), "gothenburg": ("SE", "Sweden"), "malmö": ("SE", "Sweden"),
-    "finnish": ("FI", "Finland"), "finland": ("FI", "Finland"), "helsinki": ("FI", "Finland"), "tampere": ("FI", "Finland"),
-    "norwegian": ("NO", "Norway"), "norway": ("NO", "Norway"), "oslo": ("NO", "Norway"), "bergen": ("NO", "Norway"),
-    "danish": ("DK", "Denmark"), "denmark": ("DK", "Denmark"), "copenhagen": ("DK", "Denmark"),
-    "dutch": ("NL", "Netherlands"), "netherlands": ("NL", "Netherlands"), "amsterdam": ("NL", "Netherlands"), "rotterdam": ("NL", "Netherlands"), "the hague": ("NL", "Netherlands"),
-    "brazilian": ("BR", "Brazil"), "brazil": ("BR", "Brazil"), "rio de janeiro": ("BR", "Brazil"), "são paulo": ("BR", "Brazil"), "salvador": ("BR", "Brazil"),
-    "japanese": ("JP", "Japan"), "japan": ("JP", "Japan"), "tokyo": ("JP", "Japan"), "osaka": ("JP", "Japan"), "kyoto": ("JP", "Japan"),
-    "irish": ("IE", "Ireland"), "ireland": ("IE", "Ireland"), "dublin": ("IE", "Ireland"), "belfast": ("GB", "United Kingdom"),
-    "south african": ("ZA", "South Africa"), "south africa": ("ZA", "South Africa"), "johannesburg": ("ZA", "South Africa"), "cape town": ("ZA", "South Africa"), "pretoria": ("ZA", "South Africa"),
-    "new zealand": ("NZ", "New Zealand"), "auckland": ("NZ", "New Zealand"), "wellington": ("NZ", "New Zealand"),
-    "mexican": ("MX", "Mexico"), "mexico": ("MX", "Mexico"), "mexico city": ("MX", "Mexico"),
-    "argentine": ("AR", "Argentina"), "argentinian": ("AR", "Argentina"), "argentina": ("AR", "Argentina"), "buenos aires": ("AR", "Argentina"),
-    "russian": ("RU", "Russia"), "russia": ("RU", "Russia"), "moscow": ("RU", "Russia"), "saint petersburg": ("RU", "Russia"),
-    "ukrainian": ("UA", "Ukraine"), "ukraine": ("UA", "Ukraine"), "kyiv": ("UA", "Ukraine"),
-    "polish": ("PL", "Poland"), "poland": ("PL", "Poland"), "warsaw": ("PL", "Poland"), "kraków": ("PL", "Poland"),
-    "spanish": ("ES", "Spain"), "spain": ("ES", "Spain"), "madrid": ("ES", "Spain"), "barcelona": ("ES", "Spain"), "valencia": ("ES", "Spain"), "seville": ("ES", "Spain"),
-    "icelandic": ("IS", "Iceland"), "iceland": ("IS", "Iceland"), "reykjavík": ("IS", "Iceland"),
-    "belgian": ("BE", "Belgium"), "belgium": ("BE", "Belgium"), "brussels": ("BE", "Belgium"), "antwerp": ("BE", "Belgium"), "ghent": ("BE", "Belgium"),
-    "swiss": ("CH", "Switzerland"), "switzerland": ("CH", "Switzerland"), "zurich": ("CH", "Switzerland"), "geneva": ("CH", "Switzerland"), "basel": ("CH", "Switzerland"),
-    "israeli": ("IL", "Israel"), "israel": ("IL", "Israel"), "tel aviv": ("IL", "Israel"), "jerusalem": ("IL", "Israel"),
-    "indian": ("IN", "India"), "india": ("IN", "India"), "mumbai": ("IN", "India"), "delhi": ("IN", "India"),
-    "korean": ("KR", "South Korea"), "south korean": ("KR", "South Korea"), "seoul": ("KR", "South Korea"),
-    "greek": ("GR", "Greece"), "greece": ("GR", "Greece"), "athens": ("GR", "Greece"),
-    "portuguese": ("PT", "Portugal"), "portugal": ("PT", "Portugal"), "lisbon": ("PT", "Portugal"), "porto": ("PT", "Portugal"),
-    "cuban": ("CU", "Cuba"), "cuba": ("CU", "Cuba"), "havana": ("CU", "Cuba"),
-    "jamaican": ("JM", "Jamaica"), "jamaica": ("JM", "Jamaica"), "kingston": ("JM", "Jamaica"),
-    "colombian": ("CO", "Colombia"), "colombia": ("CO", "Colombia"), "bogotá": ("CO", "Colombia"), "medellín": ("CO", "Colombia"),
-    "chilean": ("CL", "Chile"), "chile": ("CL", "Chile"), "santiago": ("CL", "Chile"),
-    "nigerian": ("NG", "Nigeria"), "nigeria": ("NG", "Nigeria"), "lagos": ("NG", "Nigeria"),
-    "turkish": ("TR", "Turkey"), "turkey": ("TR", "Turkey"), "istanbul": ("TR", "Turkey"), "ankara": ("TR", "Turkey"),
-    "czech": ("CZ", "Czech Republic"), "czech republic": ("CZ", "Czech Republic"), "prague": ("CZ", "Czech Republic"),
-    "hungarian": ("HU", "Hungary"), "hungary": ("HU", "Hungary"), "budapest": ("HU", "Hungary"),
-    "romanian": ("RO", "Romania"), "romania": ("RO", "Romania"), "bucharest": ("RO", "Romania"),
-    "estonian": ("EE", "Estonia"), "estonia": ("EE", "Estonia"), "tallinn": ("EE", "Estonia"),
-    "latvian": ("LV", "Latvia"), "latvia": ("LV", "Latvia"), "riga": ("LV", "Latvia"),
-    "lithuanian": ("LT", "Lithuania"), "lithuania": ("LT", "Lithuania"), "vilnius": ("LT", "Lithuania"),
-    "croatian": ("HR", "Croatia"), "croatia": ("HR", "Croatia"), "zagreb": ("HR", "Croatia"),
-    "serbian": ("RS", "Serbia"), "serbia": ("RS", "Serbia"), "belgrade": ("RS", "Serbia"),
-    "slovenian": ("SI", "Slovenia"), "slovenia": ("SI", "Slovenia"), "ljubljana": ("SI", "Slovenia"),
-    "slovak": ("SK", "Slovakia"), "slovakia": ("SK", "Slovakia"), "bratislava": ("SK", "Slovakia"),
-    "bulgarian": ("BG", "Bulgaria"), "bulgaria": ("BG", "Bulgaria"), "sofia": ("BG", "Bulgaria"),
+_ISO_COUNTRY_OVERRIDES = {
+    "GB": "United Kingdom",
+    "US": "United States",
+    "CZ": "Czech Republic",
+    "KR": "South Korea",
+    "RU": "Russia",
+    "FR": "France",
+    "NO": "Norway",
+    "TW": "Taiwan",
+    "HK": "Hong Kong",
+    "SG": "Singapore",
+    "MT": "Malta",
+    "MC": "Monaco",
+    "AD": "Andorra",
+    "LI": "Liechtenstein",
+    "SM": "San Marino",
+    "VA": "Vatican City",
+    "PR": "Puerto Rico",
+    "FO": "Faroe Islands",
+    "GI": "Gibraltar",
+    "JE": "Jersey",
+    "GG": "Guernsey",
+    "IM": "Isle of Man",
+    "BM": "Bermuda",
+    "BB": "Barbados",
+    "TT": "Trinidad and Tobago",
 }
+
+_NON_COUNTRY_ISO_CODES = {"", "XX", "XW", "XE", "XU", "XG"}
+
+_SOVEREIGN_AREA_ALIASES = {
+    "england": ("GB", "United Kingdom"),
+    "scotland": ("GB", "United Kingdom"),
+    "wales": ("GB", "United Kingdom"),
+    "northern ireland": ("GB", "United Kingdom"),
+    "great britain": ("GB", "United Kingdom"),
+    "united kingdom": ("GB", "United Kingdom"),
+    "uk": ("GB", "United Kingdom"),
+    "united states": ("US", "United States"),
+    "united states of america": ("US", "United States"),
+    "usa": ("US", "United States"),
+    "czechia": ("CZ", "Czech Republic"),
+    "czech republic": ("CZ", "Czech Republic"),
+    "russian federation": ("RU", "Russia"),
+    "soviet union": ("RU", "Russia"),
+    "republic of korea": ("KR", "South Korea"),
+    "south korea": ("KR", "South Korea"),
+    "türkiye": ("TR", "Turkey"),
+    "turkey": ("TR", "Turkey"),
+    "west germany": ("DE", "Germany"),
+    "east germany": ("DE", "Germany"),
+    "netherlands": ("NL", "Netherlands"),
+    "the netherlands": ("NL", "Netherlands"),
+}
+
+
+def parse_artist_mbids(raw: Any) -> List[str]:
+    """Parse JSON array, bare UUID, or comma-separated artist MBIDs into clean lowercase UUIDs."""
+    if not raw:
+        return []
+    candidates: List[Any] = []
+    if isinstance(raw, (list, tuple)):
+        candidates = list(raw)
+    elif isinstance(raw, str):
+        s = raw.strip()
+        if not s or s == "[]":
+            return []
+        if s.startswith("["):
+            try:
+                parsed = json.loads(s)
+                if isinstance(parsed, list):
+                    candidates = parsed
+                else:
+                    candidates = [s]
+            except Exception:
+                candidates = [p.strip(" \"'[]") for p in s.split(",")]
+        else:
+            candidates = [p.strip() for p in s.split(",")]
+    else:
+        return []
+
+    out: List[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        if not isinstance(item, str):
+            continue
+        cleaned = item.strip().lower()
+        if _UUID_RE.match(cleaned) and cleaned not in seen:
+            seen.add(cleaned)
+            out.append(cleaned)
+    return out
+
+
+@functools.lru_cache(maxsize=1)
+def _load_iso_country_map() -> Dict[str, str]:
+    loaded: Dict[str, str] = {}
+    if os.path.isfile(WORLD_COUNTRIES_PATH):
+        try:
+            with open(WORLD_COUNTRIES_PATH, "r", encoding="utf-8") as fp:
+                raw = json.load(fp)
+            if isinstance(raw, dict):
+                for code, info in raw.items():
+                    if isinstance(info, dict) and info.get("name"):
+                        loaded[str(code).upper()] = str(info["name"])
+        except Exception:
+            pass
+    return {**loaded, **_ISO_COUNTRY_OVERRIDES}
+
+
+def _country_from_iso(iso_code: Optional[str]) -> Optional[Tuple[str, str]]:
+    if not iso_code:
+        return None
+    code = str(iso_code).strip().upper()
+    if code in _NON_COUNTRY_ISO_CODES:
+        return None
+    cmap = _load_iso_country_map()
+    if code in cmap:
+        return code, cmap[code]
+    return None
+
+
+def _map_area_name_to_country(area_name: Optional[str]) -> Optional[Tuple[str, str]]:
+    """Map exact sovereign country names (and UK nations / official aliases) to (ISO2, Name).
+
+    Cities/subdivisions intentionally return None so callers fall back to MusicBrainz
+    authoritative `country` resolution rather than guessing from city names.
+    """
+    if not area_name:
+        return None
+    norm = re.sub(r"\s+", " ", str(area_name).strip()).lower()
+    if not norm:
+        return None
+    if norm in _SOVEREIGN_AREA_ALIASES:
+        return _SOVEREIGN_AREA_ALIASES[norm]
+    cmap = _load_iso_country_map()
+    for code, cname in cmap.items():
+        if cname.lower() == norm:
+            return code, cname
+    return None
 
 
 def is_excluded_listen(artist_name: Optional[str], track_name: Optional[str] = None, release_name: Optional[str] = None) -> bool:
@@ -1047,84 +1151,388 @@ def lookup_album_release_year(artist_name: str, release_name: str) -> Optional[i
     return min(candidate_years) if candidate_years else None
 
 
-def extract_country_from_wikipedia_text(extract_text: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
-    if not extract_text:
-        return None, None
-    text = extract_text.lower()
-    for kw, (code, cname) in DEMONYM_MAP.items():
-        pattern = r"\b" + re.escape(kw) + r"\b"
-        if re.search(pattern, text):
-            return code, cname
-    return None, None
+def _mb_request_json(url: str, timeout: int = 10, max_retries: int = 3) -> Optional[Dict[str, Any]]:
+    """Rate-limited MusicBrainz WS2 JSON fetcher with polite retry/backoff on 429/503."""
+    global _MB_LAST_REQ
+    for attempt in range(max_retries):
+        with _MB_LOCK:
+            now = time.monotonic()
+            wait = 1.08 - (now - _MB_LAST_REQ)
+            if wait > 0:
+                time.sleep(wait)
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    _MB_LAST_REQ = time.monotonic()
+                    return json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                _MB_LAST_REQ = time.monotonic()
+                if exc.code in (429, 503) and attempt + 1 < max_retries:
+                    retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                    try:
+                        delay = float(retry_after) if retry_after else 1.2 * (2 ** attempt)
+                    except ValueError:
+                        delay = 1.2 * (2 ** attempt)
+                    time.sleep(max(1.0, min(delay, 10.0)))
+                    continue
+                return None
+            except Exception:
+                _MB_LAST_REQ = time.monotonic()
+                if attempt + 1 < max_retries:
+                    time.sleep(1.0 * (attempt + 1))
+                    continue
+                return None
+    return None
 
 
-def resolve_artist_country(artist_name: str) -> Tuple[str, Optional[str], Optional[str]]:
-    clean_name = artist_name.strip()
-    if clean_name in KNOWN_ARTIST_COUNTRIES:
-        return clean_name, KNOWN_ARTIST_COUNTRIES[clean_name][0], KNOWN_ARTIST_COUNTRIES[clean_name][1]
+def _fetch_listenbrainz_artist_metadata_batch(mbids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+    """Query ListenBrainz batch artist metadata endpoint in 50-MBID chunks."""
+    clean_mbids = []
+    seen = set()
+    for m in mbids:
+        ms = str(m or "").strip().lower()
+        if _UUID_RE.match(ms) and ms not in seen:
+            seen.add(ms)
+            clean_mbids.append(ms)
 
-    queries = [
-        f"{clean_name} (band)",
-        f"{clean_name} (musician)",
-        f"{clean_name} (singer)",
-        clean_name,
-    ]
-    headers = {"User-Agent": USER_AGENT}
-
-    for q in queries:
-        url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(q)}"
+    out: Dict[str, Dict[str, Any]] = {}
+    for i in range(0, len(clean_mbids), 50):
+        chunk = clean_mbids[i : i + 50]
+        url = "https://api.listenbrainz.org/1/metadata/artist/?artist_mbids=" + ",".join(chunk)
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
         try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                code, cname = extract_country_from_wikipedia_text(data.get("extract", ""))
-                if code and cname:
-                    return clean_name, code, cname
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                items = json.loads(resp.read().decode("utf-8"))
+            if isinstance(items, list):
+                for item in items:
+                    if isinstance(item, dict) and item.get("artist_mbid"):
+                        out[str(item["artist_mbid"]).lower()] = item
         except Exception:
             continue
+    return out
 
-    return clean_name, None, None
+
+def _extract_mb_country_from_artist_obj(data: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    """Extract canonical (ISO2, Country Name) from a MusicBrainz artist object."""
+    iso_res = _country_from_iso(data.get("country"))
+    if iso_res:
+        return iso_res
+    for area_key in ("area", "begin-area"):
+        area_obj = data.get(area_key)
+        if not isinstance(area_obj, dict):
+            continue
+        for code in area_obj.get("iso-3166-1-codes") or []:
+            iso_res = _country_from_iso(code)
+            if iso_res:
+                return iso_res
+        mapped = _map_area_name_to_country(area_obj.get("name"))
+        if mapped:
+            return mapped
+    return None
 
 
-def enrich_all_artist_countries(conn, limit: int = 120, min_plays: int = 2) -> int:
+def _fetch_musicbrainz_artist_country_by_mbid(mbid: str) -> Optional[Tuple[str, str]]:
+    clean = str(mbid or "").strip().lower()
+    if not _UUID_RE.match(clean):
+        return None
+    data = _mb_request_json(f"https://musicbrainz.org/ws/2/artist/{clean}?fmt=json")
+    if not isinstance(data, dict):
+        return None
+    return _extract_mb_country_from_artist_obj(data)
+
+
+def _search_musicbrainz_artist_country(
+    artist_name: str,
+    sample_releases: Sequence[str] = (),
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Resolve (mbid, country_code, country_name) safely without ambiguous homonym guesses."""
+    clean_name = (artist_name or "").strip()
+    if not clean_name:
+        return None, None, None
+    target_lower = clean_name.lower()
+
+    # 1. Release-disambiguated lookup first when an album title is known
+    for rel in sample_releases:
+        rel_clean = (rel or "").strip()
+        if not rel_clean:
+            continue
+        q_rel = f'artist:"{clean_name}" AND release:"{rel_clean}"'
+        rel_url = f"https://musicbrainz.org/ws/2/release/?query={urllib.parse.quote(q_rel)}&limit=3&fmt=json"
+        rel_data = _mb_request_json(rel_url)
+        for rel_item in (rel_data or {}).get("releases", []):
+            for ac in rel_item.get("artist-credit") or []:
+                art_obj = ac.get("artist") if isinstance(ac, dict) else None
+                if not isinstance(art_obj, dict):
+                    continue
+                if (art_obj.get("name") or "").strip().lower() == target_lower and art_obj.get("id"):
+                    mbid = str(art_obj["id"]).lower()
+                    res = _fetch_musicbrainz_artist_country_by_mbid(mbid)
+                    if res:
+                        return mbid, res[0], res[1]
+
+    # 2. Strict artist search (exact name/alias match, reject conflicting homonyms)
+    q_art = f'artist:"{clean_name}"'
+    art_url = f"https://musicbrainz.org/ws/2/artist/?query={urllib.parse.quote(q_art)}&limit=5&fmt=json"
+    art_data = _mb_request_json(art_url)
+    candidates = []
+    for a in (art_data or {}).get("artists", []):
+        score = int(a.get("score") or 0)
+        if score < 95:
+            continue
+        names = {(a.get("name") or "").strip().lower()}
+        for al in a.get("aliases") or []:
+            if isinstance(al, dict) and al.get("name"):
+                names.add(str(al["name"]).strip().lower())
+        if target_lower in names:
+            candidates.append(a)
+
+    if not candidates:
+        return None, None, None
+
+    if len(candidates) > 1:
+        distinct_countries = {
+            c[0] for c in (_extract_mb_country_from_artist_obj(a) for a in candidates) if c is not None
+        }
+        if len(distinct_countries) > 1:
+            return None, None, None
+
+    best = candidates[0]
+    mbid = str(best["id"]).lower() if best.get("id") else None
+    extracted = _extract_mb_country_from_artist_obj(best)
+    if extracted:
+        return mbid, extracted[0], extracted[1]
+    if mbid:
+        fetched = _fetch_musicbrainz_artist_country_by_mbid(mbid)
+        if fetched:
+            return mbid, fetched[0], fetched[1]
+    return mbid, None, None
+
+
+def resolve_artist_country(
+    artist_name: str,
+    artist_mbid: Optional[str] = None,
+    sample_releases: Sequence[str] = (),
+) -> Tuple[str, Optional[str], Optional[str], str, Optional[str]]:
+    """Resolve authoritative artist country -> (artist, code, name, source, resolved_mbid)."""
+    clean_name = artist_name.strip()
+    if clean_name in COLLAB_ARTIST_COUNTRIES:
+        code, cname = COLLAB_ARTIST_COUNTRIES[clean_name]
+        return clean_name, code, cname, "override", artist_mbid
+
+    resolved_mbid = artist_mbid.strip().lower() if artist_mbid else None
+    if resolved_mbid:
+        res = _fetch_musicbrainz_artist_country_by_mbid(resolved_mbid)
+        if res:
+            return clean_name, res[0], res[1], "musicbrainz_mbid", resolved_mbid
+    else:
+        found_mbid, code, cname = _search_musicbrainz_artist_country(clean_name, sample_releases)
+        if found_mbid:
+            resolved_mbid = found_mbid
+        if code and cname:
+            return clean_name, code, cname, "musicbrainz_search", resolved_mbid
+
+    if clean_name in KNOWN_ARTIST_COUNTRIES:
+        code, cname = KNOWN_ARTIST_COUNTRIES[clean_name]
+        return clean_name, code, cname, "known_fallback", resolved_mbid
+
+    return clean_name, None, None, "none", resolved_mbid
+
+
+def backfill_artist_mbids(conn) -> int:
+    """Populate missing artists.artist_mbid values by voting across listens.artist_mbids."""
     cur = conn.cursor()
-    cur.execute(
+    rows = cur.execute(
         """
-        SELECT DISTINCT a.artist_name
+        SELECT artist_name, artist_mbids
+        FROM listens
+        WHERE artist_mbids IS NOT NULL AND artist_mbids != '' AND artist_mbids != '[]'
+        """
+    ).fetchall()
+    votes: Dict[str, Counter] = defaultdict(Counter)
+    for row in rows:
+        mbids = parse_artist_mbids(row["artist_mbids"])
+        if not mbids:
+            continue
+        raw_name = row["artist_name"]
+        if len(mbids) == 1:
+            votes[raw_name][mbids[0]] += 1
+        else:
+            parts = split_artist_names(raw_name)
+            if len(parts) == len(mbids):
+                for part, mbid in zip(parts, mbids):
+                    votes[part][mbid] += 1
+
+    missing = cur.execute(
+        "SELECT artist_name FROM artists WHERE artist_mbid IS NULL OR artist_mbid = ''"
+    ).fetchall()
+    updates = []
+    for r in missing:
+        art = r["artist_name"]
+        if art in votes and votes[art]:
+            best_mbid = votes[art].most_common(1)[0][0]
+            updates.append((best_mbid, art))
+    if updates:
+        cur.executemany(
+            "UPDATE artists SET artist_mbid = ? WHERE artist_name = ? AND (artist_mbid IS NULL OR artist_mbid = '')",
+            updates,
+        )
+        conn.commit()
+    return len(updates)
+
+
+def _fetch_sample_releases_by_artist(conn, artist_names: Sequence[str]) -> Dict[str, List[str]]:
+    if not artist_names:
+        return {}
+    cur = conn.cursor()
+    out: Dict[str, List[str]] = defaultdict(list)
+    for idx in range(0, len(artist_names), 200):
+        chunk = list(artist_names[idx : idx + 200])
+        ph = ",".join("?" for _ in chunk)
+        rows = cur.execute(
+            f"""
+            SELECT artist_name, release_name, COUNT(*) AS c
+            FROM listens
+            WHERE artist_name IN ({ph}) AND release_name IS NOT NULL AND release_name != ''
+            GROUP BY artist_name, release_name
+            ORDER BY artist_name, c DESC
+            """,
+            chunk,
+        ).fetchall()
+        for r in rows:
+            bucket = out[r["artist_name"]]
+            if len(bucket) < 2 and r["release_name"] not in bucket:
+                bucket.append(r["release_name"])
+    return out
+
+
+def enrich_all_artist_countries(
+    conn,
+    limit: int = 120,
+    min_plays: int = 2,
+    refresh_legacy: bool = True,
+    force_refetch: bool = False,
+) -> int:
+    """Resolve artist origins via MBIDs (ListenBrainz batch + MusicBrainz WS2), replacing legacy guesses."""
+    backfill_artist_mbids(conn)
+    cur = conn.cursor()
+
+    # Apply explicit multi-artist collaboration overrides immediately
+    override_rows = [(code, cname, art) for art, (code, cname) in COLLAB_ARTIST_COUNTRIES.items()]
+    if override_rows:
+        cur.executemany(
+            """
+            UPDATE artists
+            SET country_code = ?, country_name = ?, country_fetched = 1, country_source = 'override'
+            WHERE artist_name = ?
+            """,
+            override_rows,
+        )
+        conn.commit()
+
+    if force_refetch:
+        where_cond = "1=1"
+    elif refresh_legacy:
+        where_cond = "(a.country_fetched IS NULL OR a.country_fetched = 0 OR a.country_source IS NULL)"
+    else:
+        where_cond = "(a.country_fetched IS NULL OR a.country_fetched = 0) AND (a.country_code IS NULL OR a.country_code = '')"
+
+    rows = cur.execute(
+        f"""
+        SELECT
+            a.artist_name,
+            a.artist_mbid,
+            a.country_code,
+            a.country_source,
+            COUNT(c.id) AS plays,
+            COALESCE(SUM(c.duration_ms), 0) AS total_ms
         FROM artists a
         LEFT JOIN listen_artist_credits c ON a.artist_name = c.artist_name
-        WHERE (a.country_fetched IS NULL OR a.country_fetched = 0)
-          AND (a.country_code IS NULL OR a.country_code = '')
+        WHERE {where_cond}
+          AND (a.country_source IS NULL OR a.country_source NOT IN ('override', 'manual_entry'))
         GROUP BY a.artist_name
-        HAVING COUNT(c.id) >= ?
-        ORDER BY COALESCE(SUM(c.duration_ms), 0) DESC
+        HAVING COUNT(c.id) >= ? OR (a.country_source IS NULL AND a.country_code IS NOT NULL AND a.country_code != '')
+        ORDER BY
+            CASE WHEN a.country_source IS NULL AND a.country_code IS NOT NULL AND a.country_code != '' THEN 0 ELSE 1 END ASC,
+            total_ms DESC
         LIMIT ?
         """,
         (min_plays, limit),
-    )
-    missing_artists = [r["artist_name"] for r in cur.fetchall()]
-    if not missing_artists:
+    ).fetchall()
+
+    if not rows:
         return 0
 
-    print(f"Resolving country metadata in parallel for {len(missing_artists)} artists...")
-    with ThreadPoolExecutor(max_workers=12) as executor:
-        results = list(executor.map(resolve_artist_country, missing_artists))
+    mbid_rows = [r for r in rows if r["artist_mbid"]]
+    search_rows = [r for r in rows if not r["artist_mbid"]]
+    print(f"Resolving country metadata for {len(rows)} artists ({len(mbid_rows)} via MBID, {len(search_rows)} via search)...")
 
-    found_updates = [(code, cname, art) for art, code, cname in results if code and cname]
-    all_checked = [(art,) for art, _, _ in results]
-    if found_updates:
+    updates_with_country: List[Tuple[str, str, str, str]] = []
+    clear_updates: List[Tuple[str, str]] = []
+    mbid_backfills: List[Tuple[str, str]] = []
+    need_mb_by_mbid: List[Any] = []
+
+    # Stage A: Fast ListenBrainz 50-MBID batch metadata lookup
+    if mbid_rows:
+        lb_meta = _fetch_listenbrainz_artist_metadata_batch([r["artist_mbid"] for r in mbid_rows])
+        for r in mbid_rows:
+            mbid = str(r["artist_mbid"]).lower()
+            area_name = (lb_meta.get(mbid) or {}).get("area")
+            mapped = _map_area_name_to_country(area_name)
+            if mapped:
+                updates_with_country.append((mapped[0], mapped[1], "listenbrainz_mbid", r["artist_name"]))
+            else:
+                need_mb_by_mbid.append(r)
+
+    # Stage B: Authoritative MusicBrainz WS2 lookup for city/subdivision or missing-LB MBIDs
+    for r in need_mb_by_mbid:
+        art = r["artist_name"]
+        res = _fetch_musicbrainz_artist_country_by_mbid(r["artist_mbid"])
+        if res:
+            updates_with_country.append((res[0], res[1], "musicbrainz_mbid", art))
+        elif art in KNOWN_ARTIST_COUNTRIES:
+            code, cname = KNOWN_ARTIST_COUNTRIES[art]
+            updates_with_country.append((code, cname, "known_fallback", art))
+        else:
+            clear_updates.append(("none", art))
+
+    # Stage C: No-MBID artists resolved via release-disambiguated or strict MusicBrainz search
+    if search_rows:
+        sample_rel_map = _fetch_sample_releases_by_artist(conn, [r["artist_name"] for r in search_rows])
+        for r in search_rows:
+            art = r["artist_name"]
+            _, code, cname, src, found_mbid = resolve_artist_country(
+                art,
+                artist_mbid=None,
+                sample_releases=sample_rel_map.get(art, ()),
+            )
+            if found_mbid:
+                mbid_backfills.append((found_mbid, art))
+            if code and cname:
+                updates_with_country.append((code, cname, src, art))
+            else:
+                clear_updates.append(("none", art))
+
+    if mbid_backfills:
         cur.executemany(
-            "UPDATE artists SET country_code = ?, country_name = ?, country_fetched = 1 WHERE artist_name = ?",
-            found_updates,
+            "UPDATE artists SET artist_mbid = COALESCE(artist_mbid, ?) WHERE artist_name = ?",
+            mbid_backfills,
         )
-    if all_checked:
+    if updates_with_country:
         cur.executemany(
-            "UPDATE artists SET country_fetched = 1 WHERE artist_name = ? AND (country_fetched IS NULL OR country_fetched = 0)",
-            all_checked,
+            "UPDATE artists SET country_code = ?, country_name = ?, country_fetched = 1, country_source = ? WHERE artist_name = ?",
+            updates_with_country,
+        )
+    if clear_updates:
+        cur.executemany(
+            "UPDATE artists SET country_code = NULL, country_name = NULL, country_fetched = 1, country_source = ? WHERE artist_name = ?",
+            clear_updates,
         )
     conn.commit()
-    print(f"Resolved country metadata for {len(found_updates)}/{len(missing_artists)} artists.")
-    return len(found_updates)
+    print(f"Resolved country metadata for {len(updates_with_country)}/{len(rows)} artists ({len(clear_updates)} unresolved/cleared).")
+    return len(updates_with_country)
 
 
 def load_manual_entries(config_path: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -1175,10 +1583,10 @@ def apply_manual_entries(conn) -> None:
         cur.execute(
             """
             INSERT OR REPLACE INTO artists (
-                artist_name, image_url, image_local_path, image_fetched, country_code, country_name, country_fetched
-            ) VALUES (?, ?, ?, 1, ?, ?, 1)
+                artist_name, image_url, image_local_path, image_fetched, country_code, country_name, country_fetched, country_source
+            ) VALUES (?, ?, ?, 1, ?, ?, 1, ?)
             """,
-            (art, img_url, loc_img, c_code, c_name),
+            (art, img_url, loc_img, c_code, c_name, "manual_entry" if c_code else None),
         )
 
         if loc_img:
@@ -1306,7 +1714,8 @@ def import_all_listens(db_path: str = DB_PATH, data_dir: Optional[str] = None) -
                 caa_release_mbid = add_info.get("caa_release_mbid") or mbid_map.get("caa_release_mbid")
                 raw_caa_id = add_info.get("caa_id") or mbid_map.get("caa_id")
                 caa_id = str(raw_caa_id) if raw_caa_id else None
-                ambids = add_info.get("artist_mbids") or mbid_map.get("artist_mbids") or []
+                raw_ambids = add_info.get("artist_mbids") or mbid_map.get("artist_mbids") or []
+                ambids = parse_artist_mbids(raw_ambids)
                 artist_mbids_json = json.dumps(ambids)
                 submission_client = add_info.get("submission_client")
 
@@ -1319,9 +1728,14 @@ def import_all_listens(db_path: str = DB_PATH, data_dir: Optional[str] = None) -
                 ))
 
                 unique_artists.add(artist_name)
-                if len(ambids) == 1 and ambids[0] and artist_name not in artist_mbid_meta:
+                if len(ambids) == 1 and artist_name not in artist_mbid_meta:
                     artist_mbid_meta[artist_name] = ambids[0]
-                for split_a in split_artist_names(artist_name):
+                split_parts = split_artist_names(artist_name)
+                if len(ambids) > 1 and len(split_parts) == len(ambids):
+                    for part_art, part_mbid in zip(split_parts, ambids):
+                        if part_art not in artist_mbid_meta:
+                            artist_mbid_meta[part_art] = part_mbid
+                for split_a in split_parts:
                     unique_artists.add(split_a)
 
                 if release_name:
@@ -1399,10 +1813,10 @@ def enrich_all_metadata(
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
 
-        # 1. Instant local maps
+        # 1. Collaboration overrides + Known Release Years
         cursor.executemany(
-            "UPDATE artists SET country_code = ?, country_name = ?, country_fetched = 1 WHERE artist_name = ?",
-            [(code, cname, artist) for artist, (code, cname) in KNOWN_ARTIST_COUNTRIES.items()],
+            "UPDATE artists SET country_code = ?, country_name = ?, country_fetched = 1, country_source = 'override' WHERE artist_name = ?",
+            [(code, cname, artist) for artist, (code, cname) in COLLAB_ARTIST_COUNTRIES.items()],
         )
         cursor.executemany(
             "UPDATE albums SET original_release_year = ?, year_fetched = 1 WHERE artist_name = ? AND release_name = ?",
@@ -1565,8 +1979,14 @@ def enrich_all_metadata(
                         )
             conn.commit()
 
-        # 5. Artist Country Enrichment (parallel)
-        enrich_all_artist_countries(conn, limit=max_batch, min_plays=min_plays)
+        # 5. Authoritative Artist Country Enrichment (ListenBrainz batch + MusicBrainz WS2)
+        enrich_all_artist_countries(
+            conn,
+            limit=max_batch,
+            min_plays=min_plays,
+            refresh_legacy=True,
+            force_refetch=force_refetch,
+        )
 
 
 def migrate_and_canonicalize_db(db_path: str = DB_PATH, run_enrich: bool = True) -> None:

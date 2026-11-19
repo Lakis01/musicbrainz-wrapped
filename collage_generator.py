@@ -7,6 +7,7 @@ proportional bar chart posters, and single-render multi-format export (WebP, AVI
 
 from __future__ import annotations
 
+import colorsys
 import functools
 import json
 import math
@@ -17,7 +18,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from xml.sax.saxutils import escape as xml_escape
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 try:
     import pymupdf  # type: ignore
@@ -48,6 +49,7 @@ OUTPUT_SONGS_WEBP = os.path.join(STATIC_DIR, "top_50_songs.webp")
 OUTPUT_SONGS_AVIF = os.path.join(STATIC_DIR, "top_50_songs.avif")
 OUTPUT_MAP_WEBP = os.path.join(STATIC_DIR, "world_map.webp")
 OUTPUT_YEARS_WEBP = os.path.join(STATIC_DIR, "release_years.webp")
+LOGO_PATH = os.path.join(STATIC_DIR, "logo.webp")
 
 # Gapless Tiered Bento counts:
 # 3 (1x3 hero), 7 (3 + 1x4 med), 11 (3 + 2x4 med), then +5 compact per row:
@@ -62,22 +64,38 @@ def _pick_font(*candidates: str) -> str:
     return ""
 
 
+FONT_DISPLAY = _pick_font(
+    "/usr/share/fonts/TTF/FiraSans-Heavy.ttf",
+    "/usr/share/fonts/TTF/FiraSans-ExtraBold.ttf",
+    "/usr/share/fonts/TTF/Roboto-Black.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+)
 FONT_BOLD = _pick_font(
+    "/usr/share/fonts/TTF/FiraSans-Bold.ttf",
     "/usr/share/fonts/TTF/Roboto-Bold.ttf",
     "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/noto/NotoSans-Bold.ttf",
 )
+FONT_SEMIBOLD = _pick_font(
+    "/usr/share/fonts/TTF/FiraSans-SemiBold.ttf",
+    "/usr/share/fonts/TTF/FiraSans-Medium.ttf",
+    "/usr/share/fonts/TTF/Roboto-Medium.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+)
 FONT_MEDIUM = _pick_font(
+    "/usr/share/fonts/TTF/FiraSans-Medium.ttf",
     "/usr/share/fonts/TTF/Roboto-Medium.ttf",
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
     "/usr/share/fonts/noto/NotoSans-Medium.ttf",
 )
 FONT_REGULAR = _pick_font(
+    "/usr/share/fonts/TTF/FiraSans-Regular.ttf",
     "/usr/share/fonts/TTF/Roboto-Regular.ttf",
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
     "/usr/share/fonts/noto/NotoSans-Regular.ttf",
 )
 FONT_MONO = _pick_font(
+    "/usr/share/fonts/TTF/Hack-Bold.ttf",
     "/usr/share/fonts/TTF/JetBrainsMono-Bold.ttf",
     "/usr/share/fonts/TTF/DejaVuSansMono-Bold.ttf",
 )
@@ -302,7 +320,7 @@ def create_album_tile(
     tier_type: str = "compact",
     show_captions: bool = True,
     metric: str = "minutes",
-    show_flags: bool = True,
+    show_flags: bool = False,
 ) -> Image.Image:
     img = load_album_image(alb, tile_size).convert("RGBA")
     w, h = tile_size, tile_size
@@ -429,7 +447,7 @@ def generate_tiered_collage(
     output_path: str = OUTPUT_COLLAGE_WEBP,
     canvas_width: int = 1800,
     show_captions: bool = True,
-    show_flags: bool = True,
+    show_flags: bool = False,
     formats: Optional[Sequence[str]] = None,
     db_path: str = DB_PATH,
 ):
@@ -498,7 +516,7 @@ def generate_uniform_collage(
     output_path: str = OUTPUT_COLLAGE_WEBP,
     canvas_width: int = 1800,
     show_captions: bool = True,
-    show_flags: bool = True,
+    show_flags: bool = False,
     formats: Optional[Sequence[str]] = None,
     db_path: str = DB_PATH,
 ):
@@ -579,10 +597,324 @@ def _draw_metric_bar(
 
 
 PODIUM_STYLES = {
-    1: ((245, 158, 11), (251, 191, 36), (17, 24, 39)),   # Gold
-    2: ((148, 163, 184), (226, 232, 240), (15, 23, 42)), # Silver
-    3: ((217, 119, 6), (251, 146, 60), (15, 23, 42)),    # Bronze
+    1: ((245, 158, 11), (253, 224, 71), (20, 26, 44)),   # Gold
+    2: ((148, 163, 184), (226, 232, 240), (16, 24, 42)), # Silver
+    3: ((217, 119, 6), (251, 146, 60), (18, 24, 42)),    # Bronze
 }
+
+
+@functools.lru_cache(maxsize=8)
+def _load_logo_rgba(size: int = 88) -> Optional[Image.Image]:
+    if not os.path.exists(LOGO_PATH):
+        return None
+    try:
+        with Image.open(LOGO_PATH) as im:
+            logo = im.convert("RGBA")
+        logo.thumbnail((size, size), Image.Resampling.LANCZOS)
+        pad = 10
+        canvas = Image.new("RGBA", (logo.width + pad * 2, logo.height + pad * 2), (0, 0, 0, 0))
+        shadow_alpha = logo.getchannel("A").point(lambda v: int(v * 0.55))
+        shadow = Image.new("RGBA", logo.size, (2, 6, 23, 0))
+        shadow.putalpha(shadow_alpha)
+        shadow_pad = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        shadow_pad.paste(shadow, (pad, pad + 3))
+        shadow_pad = shadow_pad.filter(ImageFilter.GaussianBlur(radius=5))
+        canvas.alpha_composite(shadow_pad)
+        canvas.alpha_composite(logo, dest=(pad, pad))
+        return canvas
+    except Exception:
+        return None
+
+
+def _extract_vibrant_color(img: Image.Image, fallback: Tuple[int, int, int]) -> Tuple[int, int, int]:
+    try:
+        thumb = img.convert("RGB").resize((24, 24), Image.Resampling.BILINEAR)
+        best_score = -1.0
+        best_rgb = fallback
+        pixels = getattr(thumb, "get_flattened_data", thumb.getdata)()
+        for r, g, b in pixels:
+            h, s, v = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+            if v < 0.16 or v > 0.94 or s < 0.20:
+                continue
+            score = s * (1.0 - abs(v - 0.55))
+            if score > best_score:
+                best_score = score
+                ns = max(0.45, min(0.85, s))
+                nv = max(0.52, min(0.88, v))
+                nr, ng, nb = colorsys.hsv_to_rgb(h, ns, nv)
+                best_rgb = (int(nr * 255), int(ng * 255), int(nb * 255))
+        return best_rgb
+    except Exception:
+        return fallback
+
+
+def _build_ambient_poster_canvas(
+    width: int,
+    height: int,
+    glow_colors: Sequence[Tuple[int, int, int]],
+) -> Image.Image:
+    stops = [
+        (0.00, (7, 10, 19)),
+        (0.18, (13, 20, 38)),
+        (0.60, (10, 15, 28)),
+        (1.00, (6, 9, 17)),
+    ]
+    strip = Image.new("RGB", (1, height))
+    px = strip.load()
+    for y in range(height):
+        t = y / float(max(1, height - 1))
+        for i in range(len(stops) - 1):
+            t0, c0 = stops[i]
+            t1, c1 = stops[i + 1]
+            if t0 <= t <= t1:
+                u = (t - t0) / max(1e-6, t1 - t0)
+                px[0, y] = (
+                    int(c0[0] + (c1[0] - c0[0]) * u),
+                    int(c0[1] + (c1[1] - c0[1]) * u),
+                    int(c0[2] + (c1[2] - c0[2]) * u),
+                )
+                break
+    base = strip.resize((width, height), Image.Resampling.BILINEAR).convert("RGBA")
+
+    colors = list(glow_colors) or [(59, 130, 246), (56, 189, 248), (139, 92, 246)]
+    while len(colors) < 3:
+        colors.append(colors[-1])
+
+    sw, sh = max(120, width // 4), max(120, height // 4)
+    glow = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+    gdraw = ImageDraw.Draw(glow)
+    # Soft studio-lit ambient orbs behind header & podium + mid-page cool accent
+    orbs = [
+        (-int(sw * 0.05), -int(sh * 0.04), int(sw * 0.45), int(sh * 0.24), colors[0], 54),
+        (int(sw * 0.28), int(sh * 0.04), int(sw * 0.72), int(sh * 0.28), colors[1], 48),
+        (int(sw * 0.62), -int(sh * 0.03), int(sw * 1.06), int(sh * 0.24), colors[2], 50),
+        (int(sw * 0.20), int(sh * 0.48), int(sw * 0.85), int(sh * 0.78), colors[0], 24),
+    ]
+    for x0, y0, x1, y1, rgb, alpha in orbs:
+        gdraw.ellipse([(x0, y0), (x1, y1)], fill=(rgb[0], rgb[1], rgb[2], alpha))
+    glow = glow.filter(ImageFilter.GaussianBlur(radius=38))
+    glow_full = glow.resize((width, height), Image.Resampling.BILINEAR)
+    base.alpha_composite(glow_full)
+    return base
+
+
+def _draw_glass_card(
+    canvas: Image.Image,
+    box: Tuple[int, int, int, int],
+    radius: int,
+    fill_rgba: Tuple[int, int, int, int],
+    border_rgba: Tuple[int, int, int, int],
+    top_accent_rgb: Optional[Tuple[int, int, int]] = None,
+) -> None:
+    x0, y0, x1, y1 = box
+    w = max(1, x1 - x0)
+    h = max(1, y1 - y0)
+    card = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    cdraw = ImageDraw.Draw(card)
+    cdraw.rounded_rectangle([(0, 0), (w - 1, h - 1)], radius=radius, fill=fill_rgba, outline=border_rgba, width=1)
+    if top_accent_rgb is not None:
+        inset = max(radius + 2, 16)
+        cdraw.rounded_rectangle(
+            [(inset, 0), (max(inset + 4, w - inset), 4)],
+            radius=2,
+            fill=(top_accent_rgb[0], top_accent_rgb[1], top_accent_rgb[2], 235),
+        )
+    canvas.alpha_composite(card, dest=(x0, y0))
+
+
+def _make_blurred_card_backdrop(
+    src_img: Image.Image,
+    w: int,
+    h: int,
+    radius: int,
+    tint_rgb: Tuple[int, int, int],
+) -> Image.Image:
+    rgb = src_img.convert("RGB").resize((w, w), Image.Resampling.BILINEAR)
+    crop = rgb.crop((0, max(0, (w - h) // 3), w, min(w, max(0, (w - h) // 3) + h))).resize(
+        (w, h), Image.Resampling.BILINEAR
+    )
+    blurred = crop.filter(ImageFilter.GaussianBlur(radius=24))
+    tint_img = Image.new("RGB", (w, h), tint_rgb)
+    tinted = Image.blend(blurred, tint_img, 0.34).convert("RGBA")
+
+    # Smooth vertical fade to transparent in lower 40%
+    grad = Image.new("L", (1, h), 0)
+    gpx = grad.load()
+    fade_end = int(h * 0.68)
+    for y in range(h):
+        if y >= fade_end:
+            gpx[0, y] = 0
+        else:
+            t = 1.0 - (y / float(max(1, fade_end)))
+            gpx[0, y] = int(96 * (t ** 1.4))
+    alpha_grad = grad.resize((w, h), Image.Resampling.BILINEAR)
+    card_mask = _get_tile_mask(w, h, radius)
+    # Intersect gradient fade with rounded card mask
+    from PIL import ImageChops
+    final_mask = ImageChops.multiply(alpha_grad, card_mask)
+    tinted.putalpha(final_mask)
+    return tinted
+
+
+def _paste_circular_with_ring(
+    canvas: Image.Image,
+    avatar_rgba: Image.Image,
+    cx: int,
+    cy: int,
+    ring_rgb: Tuple[int, int, int],
+    ring_w: int = 3,
+) -> None:
+    sz = avatar_rgba.width
+    r = sz // 2
+    pad = ring_w + 10
+    ring_sz = sz + pad * 2
+    overlay = Image.new("RGBA", (ring_sz, ring_sz), (0, 0, 0, 0))
+    odraw = ImageDraw.Draw(overlay)
+    rc = ring_sz // 2
+    odraw.ellipse(
+        [(rc - r - ring_w - 3, rc - r - ring_w + 2), (rc + r + ring_w + 3, rc + r + ring_w + 8)],
+        fill=(2, 6, 23, 145),
+    )
+    overlay = overlay.filter(ImageFilter.GaussianBlur(radius=4))
+    odraw = ImageDraw.Draw(overlay)
+    odraw.ellipse(
+        [(rc - r - ring_w, rc - r - ring_w), (rc + r + ring_w, rc + r + ring_w)],
+        fill=(ring_rgb[0], ring_rgb[1], ring_rgb[2], 215),
+    )
+    odraw.ellipse([(rc - r, rc - r), (rc + r, rc + r)], fill=(12, 18, 32, 255))
+    canvas.alpha_composite(overlay, dest=(cx - rc, cy - rc))
+    canvas.alpha_composite(avatar_rgba, dest=(cx - r, cy - r))
+
+
+def _paste_cover_with_shadow(
+    canvas: Image.Image,
+    cover_rgba: Image.Image,
+    x: int,
+    y: int,
+    radius: int,
+    border_rgb: Tuple[int, int, int] = (148, 163, 184),
+) -> None:
+    w, h = cover_rgba.size
+    pad = 12
+    sh = Image.new("RGBA", (w + pad * 2, h + pad * 2), (0, 0, 0, 0))
+    ImageDraw.Draw(sh).rounded_rectangle(
+        [(pad, pad + 4), (pad + w, pad + h + 4)],
+        radius=radius,
+        fill=(2, 6, 23, 165),
+    )
+    sh = sh.filter(ImageFilter.GaussianBlur(radius=6))
+    canvas.alpha_composite(sh, dest=(x - pad, y - pad))
+    canvas.alpha_composite(cover_rgba, dest=(x, y))
+    rim = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    ImageDraw.Draw(rim).rounded_rectangle(
+        [(0, 0), (w - 1, h - 1)],
+        radius=radius,
+        outline=(border_rgb[0], border_rgb[1], border_rgb[2], 145),
+        width=2,
+    )
+    canvas.alpha_composite(rim, dest=(x, y))
+
+
+def _draw_poster_header(
+    canvas: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    padding: int,
+    canvas_w: int,
+    title: str,
+    subtitle: str,
+    accent_rgb: Tuple[int, int, int],
+    meta_pill: Optional[str] = None,
+) -> int:
+    """Render clean editorial header: Title top-left, Logo top-right, divider rule."""
+    font_title = get_font(FONT_DISPLAY, 48)
+    font_sub = get_font(FONT_MEDIUM, 17)
+    font_pill = get_font(FONT_MONO, 13)
+
+    logo = _load_logo_rgba(88)
+    logo_space = (logo.width + 24) if logo is not None else 0
+    max_title_w = canvas_w - padding * 2 - logo_space
+
+    # Fit title gracefully if very long
+    title_sz = 48
+    while title_sz > 30 and draw.textlength(title, font=get_font(FONT_DISPLAY, title_sz)) > max_title_w:
+        title_sz -= 2
+    font_title = get_font(FONT_DISPLAY, title_sz)
+
+    draw.text((padding, padding + 2), title, fill=(248, 250, 252), font=font_title)
+
+    sub_y = padding + 68
+    draw.ellipse([(padding, sub_y - 5), (padding + 10, sub_y + 5)], fill=accent_rgb)
+    draw.text((padding + 20, sub_y), subtitle, fill=(148, 163, 184), font=font_sub, anchor="lm")
+
+    if meta_pill:
+        sub_end_x = padding + 20 + int(draw.textlength(subtitle, font=font_sub)) + 16
+        pill_tw = int(draw.textlength(meta_pill, font=font_pill))
+        pill_w = pill_tw + 22
+        if sub_end_x + pill_w < canvas_w - padding - logo_space:
+            _draw_glass_card(
+                canvas,
+                (sub_end_x, sub_y - 13, sub_end_x + pill_w, sub_y + 13),
+                radius=13,
+                fill_rgba=(22, 33, 56, 220),
+                border_rgba=(accent_rgb[0], accent_rgb[1], accent_rgb[2], 125),
+            )
+            draw.text((sub_end_x + pill_w // 2, sub_y), meta_pill, fill=(203, 213, 225), font=font_pill, anchor="mm")
+
+    if logo is not None:
+        lx = canvas_w - padding - logo.width + 10
+        ly = max(8, padding - 6)
+        canvas.alpha_composite(logo, dest=(lx, ly))
+
+    div_y = padding + 100
+    div_w = canvas_w - padding * 2
+    # Gradient hairline divider
+    div_img = Image.new("RGBA", (div_w, 2), (0, 0, 0, 0))
+    ddraw = ImageDraw.Draw(div_img)
+    for col in range(div_w):
+        t = col / float(max(1, div_w - 1))
+        if t < 0.35:
+            u = t / 0.35
+            r = int(accent_rgb[0] + (51 - accent_rgb[0]) * u)
+            g = int(accent_rgb[1] + (65 - accent_rgb[1]) * u)
+            b = int(accent_rgb[2] + (95 - accent_rgb[2]) * u)
+            a = int(210 - 95 * u)
+        else:
+            r, g, b, a = 51, 65, 95, int(115 * (1.0 - (t - 0.35) / 0.65 * 0.65))
+        ddraw.point((col, 0), fill=(r, g, b, a))
+        ddraw.point((col, 1), fill=(r, g, b, a // 2))
+    canvas.alpha_composite(div_img, dest=(padding, div_y))
+    return div_y + 22
+
+
+def _draw_row_gradient_bar(
+    canvas: Image.Image,
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+    ratio: float,
+    accent_rgb: Tuple[int, int, int],
+    tip_rgb: Tuple[int, int, int],
+) -> None:
+    radius = max(2, h // 2)
+    track = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    ImageDraw.Draw(track).rounded_rectangle([(0, 0), (w - 1, h - 1)], radius=radius, fill=(26, 37, 60, 220))
+    canvas.alpha_composite(track, dest=(x, y))
+    if ratio <= 0:
+        return
+    fill_w = max(h, int(w * max(0.0, min(1.0, ratio))))
+    bar_img = Image.new("RGBA", (fill_w, h), (0, 0, 0, 0))
+    bdraw = ImageDraw.Draw(bar_img)
+    for col in range(fill_w):
+        t = col / float(max(1, fill_w - 1))
+        r = int(accent_rgb[0] + (tip_rgb[0] - accent_rgb[0]) * t)
+        g = int(accent_rgb[1] + (tip_rgb[1] - accent_rgb[1]) * t)
+        b = int(accent_rgb[2] + (tip_rgb[2] - accent_rgb[2]) * t)
+        bdraw.line([(col, 0), (col, h - 1)], fill=(r, g, b, 255))
+    mask = Image.new("L", (fill_w, h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([(0, 0), (fill_w - 1, h - 1)], radius=radius, fill=255)
+    bar_img.putalpha(mask)
+    canvas.alpha_composite(bar_img, dest=(x, y))
 
 
 def generate_artists_table_image(
@@ -592,11 +924,11 @@ def generate_artists_table_image(
     start_ts: Optional[int] = None,
     end_ts: Optional[int] = None,
     output_path: str = OUTPUT_ARTISTS_WEBP,
-    show_flags: bool = True,
+    show_flags: bool = False,
     formats: Optional[Sequence[str]] = None,
     db_path: str = DB_PATH,
 ):
-    """Render Wrapped Top Artists poster with Top-3 Podium cards and proportional metric bars."""
+    """Render editorial Wrapped Top Artists poster with elevated #1 Podium and 2-col ranked cards."""
     artists = get_top_artists(
         limit=limit, metric=metric, timeframe=timeframe, start_ts=start_ts, end_ts=end_ts, db_path=db_path
     )
@@ -606,148 +938,276 @@ def generate_artists_table_image(
     is_min = metric == "minutes"
     max_val = max((a["minutes_listened"] if is_min else a["play_count"]) for a in artists) or 1.0
 
-    canvas_w = 1200
-    padding = 30
-    header_h = 104
+    canvas_w = 1600
+    padding = 44
+    inner_w = canvas_w - padding * 2
+    header_total_h = padding + 122  # matches _draw_poster_header return bottom
+
     podium_items = artists[: min(3, len(artists))]
     rest_items = artists[len(podium_items) :]
-    podium_h = 252 if podium_items else 0
-    podium_gap = 20 if rest_items else 0
-    row_h = 62
-    canvas_h = header_h + padding + podium_h + podium_gap + len(rest_items) * row_h + padding
 
-    canvas = Image.new("RGB", (canvas_w, canvas_h), color=(9, 13, 22))
-    draw = ImageDraw.Draw(canvas)
-
-    font_tag = get_font(FONT_BOLD, 13)
-    font_title = get_font(FONT_BOLD, 34)
-    font_sub = get_font(FONT_REGULAR, 16)
-    font_podium_rank = get_font(FONT_BOLD, 15)
-    font_podium_name = get_font(FONT_BOLD, 20)
-    font_podium_val = get_font(FONT_BOLD, 24)
-    font_podium_sub = get_font(FONT_MEDIUM, 14)
-    font_rank = get_font(FONT_BOLD, 16)
-    font_name = get_font(FONT_BOLD, 19)
-    font_val = get_font(FONT_BOLD, 18)
-    font_sub_row = get_font(FONT_MEDIUM, 14)
-
-    # Header
-    draw.rounded_rectangle([(padding, padding), (padding + 188, padding + 24)], radius=4, fill=(29, 78, 216))
-    draw.text((padding + 94, padding + 12), "MUSICBRAINZ WRAPPED", fill=(255, 255, 255), font=font_tag, anchor="mm")
-    draw.text((padding, padding + 32), f"TOP {len(artists)} ARTISTS", fill=(248, 250, 252), font=font_title)
-    metric_label = "Listen Time" if is_min else "No. of Listens"
-    time_label = f"Timeframe: {timeframe.title() if timeframe else 'All Time'}"
-    draw.text(
-        (padding, padding + 74),
-        f"Ranked by {metric_label}  •  {time_label}  •  Unofficial",
-        fill=(148, 163, 184),
-        font=font_sub,
-    )
+    # Fetch portraits concurrently before compositing so ambient glows use real #1-#3 palette
+    def _load_pod_av(a):
+        sz = 144 if a["rank"] == 1 and len(podium_items) == 3 else 118
+        return load_artist_image(a, sz)
 
     with ThreadPoolExecutor(max_workers=8) as ex:
-        podium_avatars = list(ex.map(lambda a: _round_image(load_artist_image(a, 86)), podium_items))
-        row_avatars = list(ex.map(lambda a: _round_image(load_artist_image(a, 42)), rest_items))
+        raw_podium = list(ex.map(_load_pod_av, podium_items))
+        row_avatars = list(ex.map(lambda a: _round_image(load_artist_image(a, 48)), rest_items))
 
-    # Top 3 Podium Cards
-    inner_w = canvas_w - padding * 2
-    card_gap = 16
-    card_w = (inner_w - card_gap * (len(podium_items) - 1)) // max(1, len(podium_items))
-    podium_y = header_h + padding
+    podium_avatars = [_round_image(im) for im in raw_podium]
+    glow_palette = [
+        _extract_vibrant_color(im, fallback)
+        for im, fallback in zip(raw_podium, [(245, 158, 11), (56, 189, 248), (139, 92, 246)])
+    ]
 
-    for idx, art in enumerate(podium_items):
-        cx = padding + idx * (card_w + card_gap)
-        rank = art["rank"]
-        accent, tip, card_bg = PODIUM_STYLES.get(rank, ((59, 130, 246), (56, 189, 248), (17, 24, 39)))
+    podium_area_h = 374 if podium_items else 0
+    podium_gap = 28 if rest_items else 0
+    two_col = len(rest_items) > 10
+    row_h = 74
+    row_gap = 10
 
-        draw.rounded_rectangle(
-            [(cx, podium_y), (cx + card_w, podium_y + podium_h)],
-            radius=14,
-            fill=card_bg,
-            outline=(148, 163, 184, 55),
-            width=1,
-        )
-        # Top accent highlight bar
-        draw.rounded_rectangle([(cx + 18, podium_y + 1), (cx + card_w - 18, podium_y + 5)], radius=2, fill=accent)
+    if rest_items:
+        if two_col:
+            left_count = (len(rest_items) + 1) // 2
+            list_h = left_count * row_h + max(0, left_count - 1) * row_gap
+        else:
+            list_h = len(rest_items) * row_h + max(0, len(rest_items) - 1) * row_gap
+    else:
+        list_h = 0
 
-        # Rank pill
-        draw.rounded_rectangle([(cx + 16, podium_y + 18), (cx + 62, podium_y + 44)], radius=6, fill=accent)
-        draw.text((cx + 39, podium_y + 31), f"#{rank}", fill=(10, 14, 24), font=font_podium_rank, anchor="mm")
+    canvas_h = header_total_h + podium_area_h + podium_gap + list_h + padding
+    canvas = _build_ambient_poster_canvas(canvas_w, canvas_h, glow_palette)
+    draw = ImageDraw.Draw(canvas)
 
-        # Avatar
-        av = podium_avatars[idx]
-        canvas.paste(av, (cx + card_w // 2 - 43, podium_y + 20), av)
+    metric_label = "Listen Time" if is_min else "No. of Listens"
+    time_label = _format_timeframe_label(timeframe, start_ts, end_ts)
+    total_hrs_shown = sum(a["hours_listened"] for a in artists)
+    total_plays_shown = sum(a["play_count"] for a in artists)
+    unique_cc = len({a["country_code"] for a in artists if a.get("country_code") and a["country_code"] != "XX"})
+    meta_pill = (
+        f"{total_hrs_shown:,.1f} hrs  •  {unique_cc} countries"
+        if (is_min and unique_cc > 0)
+        else (f"{total_hrs_shown:,.1f} hrs shown" if is_min else f"{total_plays_shown:,} listens shown")
+    )
+    podium_y = _draw_poster_header(
+        canvas,
+        draw,
+        padding=padding,
+        canvas_w=canvas_w,
+        title=f"TOP {len(artists)} ARTISTS",
+        subtitle=f"Ranked by {metric_label}  •  Timeframe: {time_label}",
+        accent_rgb=(56, 189, 248),
+        meta_pill=meta_pill,
+    )
 
-        # Artist name + inline flag centered
-        cc = art.get("country_code")
-        has_flag = show_flags and bool(cc) and cc != "XX"
-        flag_w, flag_h = 26, 19
-        flag_gap = 8 if has_flag else 0
-        max_nw = card_w - 36 - flag_w - flag_gap
-        name_txt = _truncate_text(draw, art["artist_name"], font_podium_name, max_nw)
-        name_w = int(draw.textlength(name_txt, font=font_podium_name))
-        total_nw = name_w + flag_gap + (flag_w if has_flag else 0)
-        nx = cx + (card_w - total_nw) // 2
-        ny = podium_y + 128
-        draw.text((nx, ny), name_txt, fill=(248, 250, 252), font=font_podium_name, anchor="lm")
-        if has_flag:
-            fimg = get_flag_rgba(cc, flag_w, flag_h)
-            canvas.paste(fimg, (nx + name_w + flag_gap, ny - flag_h // 2), fimg)
+    font_podium_rank = get_font(FONT_MONO, 14)
+    font_podium_pct = get_font(FONT_MONO, 12)
+    font_rank = get_font(FONT_MONO, 15)
+    font_name = get_font(FONT_BOLD, 19)
+    font_val = get_font(FONT_MONO, 16)
+    font_sub_row = get_font(FONT_MONO, 13)
+    font_pct = get_font(FONT_MONO, 12)
 
-        # Primary + secondary stats
-        val = art["minutes_listened"] if is_min else art["play_count"]
-        ratio = val / max_val
-        hrs = art["hours_listened"]
-        mins = art["minutes_listened"]
-        primary_txt = f"{hrs:.1f} hrs ({mins:,.0f}m)" if is_min else f"{art['play_count']:,} listens"
-        secondary_txt = f"{art['play_count']:,} listens  •  {int(round(ratio * 100))}% of #1" if is_min else f"{hrs:.1f} hrs ({mins:,.0f}m)  •  {int(round(ratio * 100))}% of #1"
+    # Architectural Podium (#2 Left, #1 Center Elevated, #3 Right when 3 artists)
+    if podium_items:
+        card_gap = 22
+        if len(podium_items) == 3:
+            # Order visually as [rank 2, rank 1, rank 3]
+            layout_specs = [
+                (1, padding, 458, podium_y + 24, 350, 118),
+                (0, padding + 458 + card_gap, 552, podium_y, 374, 144),
+                (2, padding + 458 + card_gap + 552 + card_gap, 458, podium_y + 24, 350, 118),
+            ]
+        else:
+            cw = (inner_w - card_gap * (len(podium_items) - 1)) // len(podium_items)
+            layout_specs = [
+                (i, padding + i * (cw + card_gap), cw, podium_y, 360, 132)
+                for i in range(len(podium_items))
+            ]
 
-        draw.text((cx + card_w // 2, podium_y + 168), primary_txt, fill=tip, font=font_podium_val, anchor="mm")
-        draw.text((cx + card_w // 2, podium_y + 196), secondary_txt, fill=(148, 163, 184), font=font_podium_sub, anchor="mm")
+        for item_idx, cx, cw, cy, ch, av_sz in layout_specs:
+            art = podium_items[item_idx]
+            rank = art["rank"]
+            is_crown = rank == 1
+            accent, tip, card_bg = PODIUM_STYLES.get(rank, ((59, 130, 246), (56, 189, 248), (17, 24, 39)))
 
-        # Visual proportional metric bar inside podium card
-        _draw_metric_bar(canvas, draw, cx + 22, podium_y + 218, card_w - 44, 14, ratio, accent_rgb=accent, tip_rgb=tip)
+            # Glass card base
+            _draw_glass_card(
+                canvas,
+                (cx, cy, cx + cw, cy + ch),
+                radius=18,
+                fill_rgba=(card_bg[0], card_bg[1], card_bg[2], 235),
+                border_rgba=(accent[0], accent[1], accent[2], 145 if is_crown else 95),
+                top_accent_rgb=tip,
+            )
+            # Soft blurred artwork atmosphere inside card top
+            backdrop = _make_blurred_card_backdrop(raw_podium[item_idx], cw - 2, ch - 2, radius=17, tint_rgb=accent)
+            canvas.alpha_composite(backdrop, dest=(cx + 1, cy + 1))
 
-    # Ranked Visual Bar Chart Rows (#4+)
-    list_y = podium_y + podium_h + podium_gap
-    for idx, art in enumerate(rest_items):
-        ry = list_y + idx * row_h
-        if idx % 2 == 0:
-            draw.rounded_rectangle([(padding, ry + 2), (padding + inner_w, ry + row_h - 2)], radius=8, fill=(16, 23, 39))
+            # Rank pill top-left & share pill top-right
+            val = art["minutes_listened"] if is_min else art["play_count"]
+            ratio = val / max_val
+            pct_int = int(round(ratio * 100))
 
-        rank = art["rank"]
-        draw.rounded_rectangle([(padding + 12, ry + 15), (padding + 56, ry + 47)], radius=6, fill=(30, 41, 59))
-        draw.text((padding + 34, ry + 31), f"#{rank}", fill=(203, 213, 225), font=font_rank, anchor="mm")
+            _draw_glass_card(
+                canvas,
+                (cx + 18, cy + 18, cx + 68, cy + 46),
+                radius=8,
+                fill_rgba=(accent[0], accent[1], accent[2], 245),
+                border_rgba=(tip[0], tip[1], tip[2], 200),
+            )
+            draw.text((cx + 43, cy + 32), f"#{rank}", fill=(10, 14, 24), font=font_podium_rank, anchor="mm")
 
-        canvas.paste(row_avatars[idx], (padding + 68, ry + 10), row_avatars[idx])
+            pill_lbl = "LEADER" if is_crown else f"{pct_int}% OF #1"
+            pill_w = int(draw.textlength(pill_lbl, font=font_podium_pct)) + 20
+            _draw_glass_card(
+                canvas,
+                (cx + cw - 18 - pill_w, cy + 20, cx + cw - 18, cy + 44),
+                radius=12,
+                fill_rgba=(12, 18, 32, 195),
+                border_rgba=(accent[0], accent[1], accent[2], 105),
+            )
+            draw.text((cx + cw - 18 - pill_w // 2, cy + 32), pill_lbl, fill=tip, font=font_podium_pct, anchor="mm")
 
-        # Visual metric bar on right
-        bar_x = padding + 590
-        bar_w = 320
-        val = art["minutes_listened"] if is_min else art["play_count"]
-        ratio = val / max_val
-        _draw_metric_bar(canvas, draw, bar_x, ry + 23, bar_w, 16, ratio)
+            # Circular portrait with metallic halo ring
+            av_cy = cy + (104 if is_crown else 96)
+            _paste_circular_with_ring(canvas, podium_avatars[item_idx], cx + cw // 2, av_cy, accent, ring_w=3 if is_crown else 2)
 
-        # Metric text right of bar
-        hrs = art["hours_listened"]
-        mins = art["minutes_listened"]
-        primary_txt = f"{mins:,.0f}m ({hrs:.1f}h)" if is_min else f"{art['play_count']:,} plays"
-        secondary_txt = f"{art['play_count']:,}p" if is_min else f"{mins:,.0f}m"
-        draw.text((padding + inner_w - 86, ry + 31), primary_txt, fill=(125, 211, 252), font=font_val, anchor="rm")
-        draw.text((padding + inner_w - 16, ry + 31), secondary_txt, fill=(148, 163, 184), font=font_sub_row, anchor="rm")
+            # Name + inline flag
+            font_p_name = get_font(FONT_BOLD, 25 if is_crown else 21)
+            font_p_val = get_font(FONT_DISPLAY, 33 if is_crown else 27)
+            font_p_sub = get_font(FONT_MEDIUM, 14)
 
-        # Artist name + inline country flag
-        name_x = padding + 124
-        cc = art.get("country_code")
-        has_flag = show_flags and bool(cc) and cc != "XX"
-        flag_w, flag_h = 24, 18
-        flag_gap = 9 if has_flag else 0
-        max_nw = (bar_x - 20) - name_x - (flag_w + flag_gap if has_flag else 0)
-        name_txt = _truncate_text(draw, art["artist_name"], font_name, max_nw)
-        draw.text((name_x, ry + 31), name_txt, fill=(248, 250, 252), font=font_name, anchor="lm")
-        if has_flag:
-            fimg = get_flag_rgba(cc, flag_w, flag_h)
-            nw = int(draw.textlength(name_txt, font=font_name))
-            canvas.paste(fimg, (name_x + nw + flag_gap, ry + 31 - flag_h // 2), fimg)
+            cc = art.get("country_code")
+            has_flag = show_flags and bool(cc) and cc != "XX"
+            flag_w, flag_h = (28, 20) if is_crown else (24, 18)
+            flag_gap = 9 if has_flag else 0
+            max_nw = cw - 40 - (flag_w + flag_gap if has_flag else 0)
+            name_txt = _truncate_text(draw, art["artist_name"], font_p_name, max_nw)
+            name_w = int(draw.textlength(name_txt, font=font_p_name))
+            tot_nw = name_w + flag_gap + (flag_w if has_flag else 0)
+            nx = cx + (cw - tot_nw) // 2
+            ny = cy + (206 if is_crown else 186)
+            draw.text((nx, ny), name_txt, fill=(248, 250, 252), font=font_p_name, anchor="lm")
+            if has_flag:
+                fimg = get_flag_rgba(cc, flag_w, flag_h)
+                canvas.alpha_composite(fimg, dest=(nx + name_w + flag_gap, ny - flag_h // 2))
+
+            # Hero metric + secondary summary
+            hrs = art["hours_listened"]
+            mins = art["minutes_listened"]
+            primary_txt = f"{hrs:.1f} hrs" if is_min else f"{art['play_count']:,} listens"
+            secondary_txt = f"{mins:,.0f} mins  •  {art['play_count']:,} listens" if is_min else f"{hrs:.1f} hrs ({mins:,.0f} mins)"
+            draw.text((cx + cw // 2, cy + (256 if is_crown else 234)), primary_txt, fill=tip, font=font_p_val, anchor="mm")
+            draw.text((cx + cw // 2, cy + (290 if is_crown else 268)), secondary_txt, fill=(148, 163, 184), font=font_p_sub, anchor="mm")
+
+            # Sleek metallic proportional bar
+            _draw_row_gradient_bar(canvas, cx + 26, cy + ch - 28, cw - 52, 10, ratio, accent_rgb=accent, tip_rgb=tip)
+
+    # Ranked Visual Cards (#4+) — 2-column magazine layout (column-major) when > 10 rest items
+    list_y = podium_y + podium_area_h + podium_gap
+    if rest_items:
+        col_gap = 20
+        col_w = (inner_w - col_gap) // 2 if two_col else inner_w
+        left_count = (len(rest_items) + 1) // 2 if two_col else len(rest_items)
+
+        for idx, art in enumerate(rest_items):
+            col_idx = (0 if idx < left_count else 1) if two_col else 0
+            row_idx = (idx if idx < left_count else idx - left_count) if two_col else idx
+            rx = padding + col_idx * (col_w + col_gap)
+            ry = list_y + row_idx * (row_h + row_gap)
+            rank = art["rank"]
+            is_top10 = rank <= 10
+
+            _draw_glass_card(
+                canvas,
+                (rx, ry, rx + col_w, ry + row_h),
+                radius=12,
+                fill_rgba=(18, 26, 45, 225) if is_top10 else (14, 21, 36, 205),
+                border_rgba=(56, 189, 248, 70) if is_top10 else (51, 65, 85, 90),
+            )
+
+            # Rank Pill
+            _draw_glass_card(
+                canvas,
+                (rx + 12, ry + 19, rx + 58, ry + 55),
+                radius=8,
+                fill_rgba=(29, 78, 216, 130) if is_top10 else (30, 41, 59, 210),
+                border_rgba=(56, 189, 248, 110) if is_top10 else (71, 85, 105, 85),
+            )
+            draw.text((rx + 35, ry + 37), f"#{rank}", fill=(224, 242, 254) if is_top10 else (203, 213, 225), font=font_rank, anchor="mm")
+
+            # Circular Avatar
+            av = row_avatars[idx]
+            canvas.alpha_composite(av, dest=(rx + 68, ry + 13))
+
+            # Text + Proportional Bar right of avatar
+            cx_start = rx + 128
+            cx_end = rx + col_w - 16
+            top_y = ry + 26
+
+            hrs = art["hours_listened"]
+            mins = art["minutes_listened"]
+            primary_txt = f"{mins:,.0f}m ({hrs:.1f}h)" if is_min else f"{art['play_count']:,} plays"
+            secondary_txt = f"• {art['play_count']:,}p" if is_min else f"• {mins:,.0f}m"
+            sec_w = int(draw.textlength(secondary_txt, font=font_sub_row))
+            prim_w = int(draw.textlength(primary_txt, font=font_val))
+
+            draw.text((cx_end, top_y), secondary_txt, fill=(148, 163, 184), font=font_sub_row, anchor="rm")
+            draw.text((cx_end - sec_w - 8, top_y), primary_txt, fill=(125, 211, 252), font=font_val, anchor="rm")
+
+            # Artist name + inline flag
+            cc = art.get("country_code")
+            has_flag = show_flags and bool(cc) and cc != "XX"
+            flag_w, flag_h = 22, 16
+            flag_gap = 8 if has_flag else 0
+            stat_block_w = prim_w + sec_w + 22
+            max_nw = (cx_end - stat_block_w) - cx_start - (flag_w + flag_gap if has_flag else 0)
+            name_txt = _truncate_text(draw, art["artist_name"], font_name, max_nw)
+            draw.text((cx_start, top_y), name_txt, fill=(248, 250, 252), font=font_name, anchor="lm")
+            if has_flag:
+                fimg = get_flag_rgba(cc, flag_w, flag_h)
+                nw = int(draw.textlength(name_txt, font=font_name))
+                canvas.alpha_composite(fimg, dest=(cx_start + nw + flag_gap, top_y - flag_h // 2))
+
+            # Proportional bar on lower half + % label
+            val = art["minutes_listened"] if is_min else art["play_count"]
+            ratio = val / max_val
+            pct_str = f"{max(1, int(round(ratio * 100)))}%"
+            pct_w = 38
+            bar_w = (cx_end - cx_start) - pct_w - 8
+            _draw_row_gradient_bar(
+                canvas,
+                cx_start,
+                ry + 49,
+                bar_w,
+                8,
+                ratio,
+                accent_rgb=(59, 130, 246) if is_top10 else (37, 99, 235),
+                tip_rgb=(56, 189, 248) if is_top10 else (34, 211, 238),
+            )
+            draw.text((cx_end, ry + 53), pct_str, fill=(148, 163, 184), font=font_pct, anchor="rm")
+
+        # Balance bottom-right odd slot in 2-column mode with a crisp collection summary card
+        if two_col and (len(rest_items) % 2 == 1):
+            sx = padding + (col_w + col_gap)
+            sy = list_y + (left_count - 1) * (row_h + row_gap)
+            _draw_glass_card(
+                canvas,
+                (sx, sy, sx + col_w, sy + row_h),
+                radius=12,
+                fill_rgba=(15, 23, 42, 195),
+                border_rgba=(56, 189, 248, 65),
+            )
+            sum_lbl = f"TOP {len(artists)} SUMMARY"
+            sum_vals = (
+                f"{total_hrs_shown:,.1f} hrs  •  {total_plays_shown:,} listens  •  {unique_cc} countries"
+                if unique_cc > 0
+                else f"{total_hrs_shown:,.1f} hrs  •  {total_plays_shown:,} listens"
+            )
+            draw.text((sx + 20, sy + row_h // 2), sum_lbl, fill=(56, 189, 248), font=font_podium_pct, anchor="lm")
+            draw.text((sx + col_w - 20, sy + row_h // 2), sum_vals, fill=(203, 213, 225), font=font_sub_row, anchor="rm")
 
     if formats is not None:
         return save_canvas_formats(canvas, output_path, formats, quality=92)
@@ -762,11 +1222,11 @@ def generate_songs_table_image(
     start_ts: Optional[int] = None,
     end_ts: Optional[int] = None,
     output_path: str = OUTPUT_SONGS_WEBP,
-    show_flags: bool = True,
+    show_flags: bool = False,
     formats: Optional[Sequence[str]] = None,
     db_path: str = DB_PATH,
 ):
-    """Render Wrapped Top Songs poster with Top-3 Podium cards and proportional metric bars."""
+    """Render editorial Wrapped Top Songs poster with elevated #1 Podium and 2-col ranked cards."""
     tracks = get_top_tracks(
         limit=limit, metric=metric, timeframe=timeframe, start_ts=start_ts, end_ts=end_ts, db_path=db_path
     )
@@ -776,158 +1236,287 @@ def generate_songs_table_image(
     is_min = metric == "minutes"
     max_val = max((t["minutes_listened"] if is_min else t["play_count"]) for t in tracks) or 1.0
 
-    canvas_w = 1200
-    padding = 30
-    header_h = 104
+    canvas_w = 1600
+    padding = 44
+    inner_w = canvas_w - padding * 2
+    header_total_h = padding + 122
+
     podium_items = tracks[: min(3, len(tracks))]
     rest_items = tracks[len(podium_items) :]
-    podium_h = 264 if podium_items else 0
-    podium_gap = 20 if rest_items else 0
-    row_h = 66
-    canvas_h = header_h + padding + podium_h + podium_gap + len(rest_items) * row_h + padding
 
-    canvas = Image.new("RGB", (canvas_w, canvas_h), color=(9, 13, 22))
-    draw = ImageDraw.Draw(canvas)
-
-    font_tag = get_font(FONT_BOLD, 13)
-    font_title = get_font(FONT_BOLD, 34)
-    font_sub = get_font(FONT_REGULAR, 16)
-    font_podium_rank = get_font(FONT_BOLD, 15)
-    font_podium_song = get_font(FONT_BOLD, 19)
-    font_podium_art = get_font(FONT_MEDIUM, 14)
-    font_podium_val = get_font(FONT_BOLD, 23)
-    font_podium_sub = get_font(FONT_MEDIUM, 13)
-    font_rank = get_font(FONT_BOLD, 16)
-    font_song = get_font(FONT_BOLD, 18)
-    font_artist = get_font(FONT_MEDIUM, 14)
-    font_val = get_font(FONT_BOLD, 18)
-    font_sub_row = get_font(FONT_MEDIUM, 13)
-
-    draw.rounded_rectangle([(padding, padding), (padding + 188, padding + 24)], radius=4, fill=(29, 78, 216))
-    draw.text((padding + 94, padding + 12), "MUSICBRAINZ WRAPPED", fill=(255, 255, 255), font=font_tag, anchor="mm")
-    draw.text((padding, padding + 32), f"TOP {len(tracks)} SONGS", fill=(248, 250, 252), font=font_title)
-    metric_label = "Listen Time" if is_min else "No. of Listens"
-    time_label = f"Timeframe: {timeframe.title() if timeframe else 'All Time'}"
-    draw.text(
-        (padding, padding + 74),
-        f"Ranked by {metric_label}  •  {time_label}  •  Unofficial",
-        fill=(148, 163, 184),
-        font=font_sub,
-    )
-
-    def _load_cov(t, sz):
-        return _round_image(
-            load_album_image(
-                {
-                    "cover_local_path": t.get("album_cover_local_path"),
-                    "release_name": t.get("release_name"),
-                    "artist_name": t.get("artist_name"),
-                    "rank": t["rank"],
-                },
-                sz,
-            ),
-            radius=8,
+    def _load_raw_cov(t, sz):
+        return load_album_image(
+            {
+                "cover_local_path": t.get("album_cover_local_path"),
+                "release_name": t.get("release_name"),
+                "artist_name": t.get("artist_name"),
+                "rank": t["rank"],
+            },
+            sz,
         )
+
+    def _load_pod_cov(t):
+        sz = 140 if t["rank"] == 1 and len(podium_items) == 3 else 114
+        return _load_raw_cov(t, sz)
 
     with ThreadPoolExecutor(max_workers=8) as ex:
-        podium_covs = list(ex.map(lambda t: _load_cov(t, 84), podium_items))
-        row_covs = list(ex.map(lambda t: _load_cov(t, 44), rest_items))
+        raw_podium = list(ex.map(_load_pod_cov, podium_items))
+        row_covs = list(ex.map(lambda t: _round_image(_load_raw_cov(t, 52), radius=9), rest_items))
 
-    # Top 3 Podium Cards
-    inner_w = canvas_w - padding * 2
-    card_gap = 16
-    card_w = (inner_w - card_gap * (len(podium_items) - 1)) // max(1, len(podium_items))
-    podium_y = header_h + padding
+    podium_covs = [_round_image(im, radius=16 if podium_items[i]["rank"] == 1 and len(podium_items) == 3 else 13) for i, im in enumerate(raw_podium)]
+    glow_palette = [
+        _extract_vibrant_color(im, fallback)
+        for im, fallback in zip(raw_podium, [(139, 92, 246), (56, 189, 248), (245, 158, 11)])
+    ]
 
-    for idx, t in enumerate(podium_items):
-        cx = padding + idx * (card_w + card_gap)
-        rank = t["rank"]
-        accent, tip, card_bg = PODIUM_STYLES.get(rank, ((59, 130, 246), (56, 189, 248), (17, 24, 39)))
+    podium_area_h = 390 if podium_items else 0
+    podium_gap = 28 if rest_items else 0
+    two_col = len(rest_items) > 10
+    row_h = 82
+    row_gap = 10
 
-        draw.rounded_rectangle(
-            [(cx, podium_y), (cx + card_w, podium_y + podium_h)],
-            radius=14,
-            fill=card_bg,
-            outline=(148, 163, 184, 55),
-            width=1,
-        )
-        draw.rounded_rectangle([(cx + 18, podium_y + 1), (cx + card_w - 18, podium_y + 5)], radius=2, fill=accent)
-        draw.rounded_rectangle([(cx + 16, podium_y + 18), (cx + 62, podium_y + 44)], radius=6, fill=accent)
-        draw.text((cx + 39, podium_y + 31), f"#{rank}", fill=(10, 14, 24), font=font_podium_rank, anchor="mm")
+    if rest_items:
+        if two_col:
+            left_count = (len(rest_items) + 1) // 2
+            list_h = left_count * row_h + max(0, left_count - 1) * row_gap
+        else:
+            list_h = len(rest_items) * row_h + max(0, len(rest_items) - 1) * row_gap
+    else:
+        list_h = 0
 
-        canvas.paste(podium_covs[idx], (cx + card_w // 2 - 42, podium_y + 18), podium_covs[idx])
+    canvas_h = header_total_h + podium_area_h + podium_gap + list_h + padding
+    canvas = _build_ambient_poster_canvas(canvas_w, canvas_h, glow_palette)
+    draw = ImageDraw.Draw(canvas)
 
-        song_txt = _truncate_text(draw, t["track_name"], font_podium_song, card_w - 32)
-        draw.text((cx + card_w // 2, podium_y + 122), song_txt, fill=(248, 250, 252), font=font_podium_song, anchor="mm")
+    metric_label = "Listen Time" if is_min else "No. of Listens"
+    time_label = _format_timeframe_label(timeframe, start_ts, end_ts)
+    total_mins_shown = sum(t["minutes_listened"] for t in tracks)
+    total_plays_shown = sum(t["play_count"] for t in tracks)
+    meta_pill = (
+        f"{total_mins_shown / 60.0:,.1f} hrs  •  {total_plays_shown:,} plays"
+        if is_min
+        else f"{total_plays_shown:,} listens  •  {total_mins_shown / 60.0:,.1f} hrs"
+    )
+    podium_y = _draw_poster_header(
+        canvas,
+        draw,
+        padding=padding,
+        canvas_w=canvas_w,
+        title=f"TOP {len(tracks)} SONGS",
+        subtitle=f"Ranked by {metric_label}  •  Timeframe: {time_label}",
+        accent_rgb=(139, 92, 246),
+        meta_pill=meta_pill,
+    )
 
-        cc = t.get("country_code")
-        has_flag = show_flags and bool(cc) and cc != "XX"
-        flag_w, flag_h = 20, 15
-        flag_gap = 7 if has_flag else 0
-        art_txt = _truncate_text(draw, t["artist_name"], font_podium_art, card_w - 40 - flag_w - flag_gap)
-        art_w = int(draw.textlength(art_txt, font=font_podium_art))
-        tot_aw = art_w + flag_gap + (flag_w if has_flag else 0)
-        ax = cx + (card_w - tot_aw) // 2
-        ay = podium_y + 146
-        draw.text((ax, ay), art_txt, fill=(203, 213, 225), font=font_podium_art, anchor="lm")
-        if has_flag:
-            fimg = get_flag_rgba(cc, flag_w, flag_h)
-            canvas.paste(fimg, (ax + art_w + flag_gap, ay - flag_h // 2), fimg)
+    font_podium_rank = get_font(FONT_MONO, 14)
+    font_podium_pct = get_font(FONT_MONO, 12)
+    font_rank = get_font(FONT_MONO, 15)
+    font_song = get_font(FONT_BOLD, 18)
+    font_artist = get_font(FONT_MEDIUM, 14)
+    font_val = get_font(FONT_MONO, 16)
+    font_sub_row = get_font(FONT_MONO, 12)
+    font_pct = get_font(FONT_MONO, 12)
 
-        val = t["minutes_listened"] if is_min else t["play_count"]
-        ratio = val / max_val
-        dur = t.get("duration_formatted") or "3:30"
-        primary_txt = f"{t['minutes_listened']:,.0f} mins" if is_min else f"{t['play_count']:,} listens"
-        secondary_txt = f"{dur} × {t['play_count']} listens  •  {int(round(ratio * 100))}% of #1"
+    # Architectural Podium (#2 Left, #1 Center Elevated, #3 Right)
+    if podium_items:
+        card_gap = 22
+        if len(podium_items) == 3:
+            layout_specs = [
+                (1, padding, 458, podium_y + 24, 366, 114, 13),
+                (0, padding + 458 + card_gap, 552, podium_y, 390, 140, 16),
+                (2, padding + 458 + card_gap + 552 + card_gap, 458, podium_y + 24, 366, 114, 13),
+            ]
+        else:
+            cw = (inner_w - card_gap * (len(podium_items) - 1)) // len(podium_items)
+            layout_specs = [
+                (i, padding + i * (cw + card_gap), cw, podium_y, 374, 128, 15)
+                for i in range(len(podium_items))
+            ]
 
-        draw.text((cx + card_w // 2, podium_y + 182), primary_txt, fill=tip, font=font_podium_val, anchor="mm")
-        draw.text((cx + card_w // 2, podium_y + 208), secondary_txt, fill=(148, 163, 184), font=font_podium_sub, anchor="mm")
-        _draw_metric_bar(canvas, draw, cx + 22, podium_y + 230, card_w - 44, 14, ratio, accent_rgb=accent, tip_rgb=tip)
+        for item_idx, cx, cw, cy, ch, cov_sz, cov_rad in layout_specs:
+            t = podium_items[item_idx]
+            rank = t["rank"]
+            is_crown = rank == 1
+            accent, tip, card_bg = PODIUM_STYLES.get(rank, ((139, 92, 246), (192, 132, 252), (17, 24, 39)))
 
-    # Ranked Visual Bar Chart Rows (#4+)
-    list_y = podium_y + podium_h + podium_gap
-    for idx, t in enumerate(rest_items):
-        ry = list_y + idx * row_h
-        if idx % 2 == 0:
-            draw.rounded_rectangle([(padding, ry + 2), (padding + inner_w, ry + row_h - 2)], radius=8, fill=(16, 23, 39))
+            _draw_glass_card(
+                canvas,
+                (cx, cy, cx + cw, cy + ch),
+                radius=18,
+                fill_rgba=(card_bg[0], card_bg[1], card_bg[2], 235),
+                border_rgba=(accent[0], accent[1], accent[2], 145 if is_crown else 95),
+                top_accent_rgb=tip,
+            )
+            backdrop = _make_blurred_card_backdrop(raw_podium[item_idx], cw - 2, ch - 2, radius=17, tint_rgb=accent)
+            canvas.alpha_composite(backdrop, dest=(cx + 1, cy + 1))
 
-        rank = t["rank"]
-        draw.rounded_rectangle([(padding + 12, ry + 17), (padding + 56, ry + 49)], radius=6, fill=(30, 41, 59))
-        draw.text((padding + 34, ry + 33), f"#{rank}", fill=(203, 213, 225), font=font_rank, anchor="mm")
-        canvas.paste(row_covs[idx], (padding + 68, ry + 11), row_covs[idx])
+            val = t["minutes_listened"] if is_min else t["play_count"]
+            ratio = val / max_val
+            pct_int = int(round(ratio * 100))
 
-        bar_x = padding + 590
-        bar_w = 320
-        val = t["minutes_listened"] if is_min else t["play_count"]
-        ratio = val / max_val
-        _draw_metric_bar(canvas, draw, bar_x, ry + 25, bar_w, 16, ratio, accent_rgb=(99, 102, 241), tip_rgb=(56, 189, 248))
+            _draw_glass_card(
+                canvas,
+                (cx + 18, cy + 18, cx + 68, cy + 46),
+                radius=8,
+                fill_rgba=(accent[0], accent[1], accent[2], 245),
+                border_rgba=(tip[0], tip[1], tip[2], 200),
+            )
+            draw.text((cx + 43, cy + 32), f"#{rank}", fill=(10, 14, 24), font=font_podium_rank, anchor="mm")
 
-        dur = t.get("duration_formatted") or "3:30"
-        primary_txt = f"{t['minutes_listened']:,.0f}m" if is_min else f"{t['play_count']} plays"
-        secondary_txt = f"{dur} × {t['play_count']}p" if is_min else f"{t['minutes_listened']:,.0f}m ({dur})"
-        draw.text((padding + inner_w - 110, ry + 33), primary_txt, fill=(125, 211, 252), font=font_val, anchor="rm")
-        draw.text((padding + inner_w - 16, ry + 33), secondary_txt, fill=(148, 163, 184), font=font_sub_row, anchor="rm")
+            pill_lbl = "TOP TRACK" if is_crown else f"{pct_int}% OF #1"
+            pill_w = int(draw.textlength(pill_lbl, font=font_podium_pct)) + 20
+            _draw_glass_card(
+                canvas,
+                (cx + cw - 18 - pill_w, cy + 20, cx + cw - 18, cy + 44),
+                radius=12,
+                fill_rgba=(12, 18, 32, 195),
+                border_rgba=(accent[0], accent[1], accent[2], 105),
+            )
+            draw.text((cx + cw - 18 - pill_w // 2, cy + 32), pill_lbl, fill=tip, font=font_podium_pct, anchor="mm")
 
-        text_x = padding + 124
-        max_w = (bar_x - 20) - text_x
-        song_txt = _truncate_text(draw, t["track_name"], font_song, max_w)
-        draw.text((text_x, ry + 21), song_txt, fill=(248, 250, 252), font=font_song, anchor="lm")
+            cov_x = cx + cw // 2 - cov_sz // 2
+            cov_y = cy + (28 if is_crown else 26)
+            _paste_cover_with_shadow(canvas, podium_covs[item_idx], cov_x, cov_y, radius=cov_rad, border_rgb=accent)
 
-        cc = t.get("country_code")
-        has_flag = show_flags and bool(cc) and cc != "XX"
-        flag_w, flag_h = 20, 15
-        art_txt = _truncate_text(draw, t["artist_name"], font_artist, int(max_w * 0.56))
-        draw.text((text_x, ry + 45), art_txt, fill=(203, 213, 225), font=font_artist, anchor="lm")
-        cur_x = text_x + int(draw.textlength(art_txt, font=font_artist))
-        if has_flag:
-            fimg = get_flag_rgba(cc, flag_w, flag_h)
-            cur_x += 7
-            canvas.paste(fimg, (cur_x, ry + 45 - flag_h // 2), fimg)
-            cur_x += flag_w
-        rem_w = (bar_x - 20) - cur_x
-        if rem_w > 30:
-            rel_txt = _truncate_text(draw, f"  •  {t['release_name']}", font_artist, rem_w)
-            draw.text((cur_x, ry + 45), rel_txt, fill=(148, 163, 184), font=font_artist, anchor="lm")
+            font_p_song = get_font(FONT_BOLD, 24 if is_crown else 20)
+            font_p_art = get_font(FONT_MEDIUM, 15)
+            font_p_alb = get_font(FONT_REGULAR, 13)
+            font_p_val = get_font(FONT_DISPLAY, 31 if is_crown else 26)
+            font_p_sub = get_font(FONT_MONO, 13)
+
+            title_y = cov_y + cov_sz + 24
+            song_txt = _truncate_text(draw, t["track_name"], font_p_song, cw - 36)
+            draw.text((cx + cw // 2, title_y), song_txt, fill=(248, 250, 252), font=font_p_song, anchor="mm")
+
+            cc = t.get("country_code")
+            has_flag = show_flags and bool(cc) and cc != "XX"
+            flag_w, flag_h = 20, 15
+            flag_gap = 7 if has_flag else 0
+            art_txt = _truncate_text(draw, t["artist_name"], font_p_art, cw - 44 - (flag_w + flag_gap if has_flag else 0))
+            art_w = int(draw.textlength(art_txt, font=font_p_art))
+            tot_aw = art_w + flag_gap + (flag_w if has_flag else 0)
+            ax = cx + (cw - tot_aw) // 2
+            ay = title_y + 26
+            draw.text((ax, ay), art_txt, fill=(203, 213, 225), font=font_p_art, anchor="lm")
+            if has_flag:
+                fimg = get_flag_rgba(cc, flag_w, flag_h)
+                canvas.alpha_composite(fimg, dest=(ax + art_w + flag_gap, ay - flag_h // 2))
+
+            rel_name = (t.get("release_name") or "").strip()
+            if rel_name:
+                alb_txt = _truncate_text(draw, rel_name, font_p_alb, cw - 44)
+                draw.text((cx + cw // 2, ay + 20), alb_txt, fill=(148, 163, 184), font=font_p_alb, anchor="mm")
+
+            dur = t.get("duration_formatted") or "3:30"
+            primary_txt = f"{t['minutes_listened']:,.0f} mins" if is_min else f"{t['play_count']:,} listens"
+            secondary_txt = f"{dur} × {t['play_count']} listens"
+            draw.text((cx + cw // 2, cy + ch - 78), primary_txt, fill=tip, font=font_p_val, anchor="mm")
+            draw.text((cx + cw // 2, cy + ch - 46), secondary_txt, fill=(148, 163, 184), font=font_p_sub, anchor="mm")
+
+            _draw_row_gradient_bar(canvas, cx + 26, cy + ch - 26, cw - 52, 10, ratio, accent_rgb=accent, tip_rgb=tip)
+
+    # Ranked 2-Column Editorial Song Cards (#4+)
+    list_y = podium_y + podium_area_h + podium_gap
+    if rest_items:
+        col_gap = 20
+        col_w = (inner_w - col_gap) // 2 if two_col else inner_w
+        left_count = (len(rest_items) + 1) // 2 if two_col else len(rest_items)
+
+        for idx, t in enumerate(rest_items):
+            col_idx = (0 if idx < left_count else 1) if two_col else 0
+            row_idx = (idx if idx < left_count else idx - left_count) if two_col else idx
+            rx = padding + col_idx * (col_w + col_gap)
+            ry = list_y + row_idx * (row_h + row_gap)
+            rank = t["rank"]
+            is_top10 = rank <= 10
+
+            _draw_glass_card(
+                canvas,
+                (rx, ry, rx + col_w, ry + row_h),
+                radius=12,
+                fill_rgba=(18, 25, 45, 225) if is_top10 else (14, 21, 36, 205),
+                border_rgba=(139, 92, 246, 75) if is_top10 else (51, 65, 85, 90),
+            )
+
+            _draw_glass_card(
+                canvas,
+                (rx + 12, ry + 24, rx + 58, ry + 58),
+                radius=8,
+                fill_rgba=(99, 102, 241, 130) if is_top10 else (30, 41, 59, 210),
+                border_rgba=(167, 139, 250, 115) if is_top10 else (71, 85, 105, 85),
+            )
+            draw.text((rx + 35, ry + 41), f"#{rank}", fill=(237, 233, 254) if is_top10 else (203, 213, 225), font=font_rank, anchor="mm")
+
+            canvas.alpha_composite(row_covs[idx], dest=(rx + 68, ry + 15))
+
+            cx_start = rx + 132
+            cx_end = rx + col_w - 16
+            top_y = ry + 22
+
+            dur = t.get("duration_formatted") or "3:30"
+            primary_txt = f"{t['minutes_listened']:,.0f}m" if is_min else f"{t['play_count']} plays"
+            secondary_txt = f"{dur} × {t['play_count']}p" if is_min else f"{t['minutes_listened']:,.0f}m ({dur})"
+            sec_w = int(draw.textlength(secondary_txt, font=font_sub_row))
+            prim_w = int(draw.textlength(primary_txt, font=font_val))
+
+            draw.text((cx_end, top_y), secondary_txt, fill=(148, 163, 184), font=font_sub_row, anchor="rm")
+            draw.text((cx_end - sec_w - 8, top_y), primary_txt, fill=(196, 181, 253), font=font_val, anchor="rm")
+
+            max_song_w = (cx_end - prim_w - sec_w - 22) - cx_start
+            song_txt = _truncate_text(draw, t["track_name"], font_song, max_song_w)
+            draw.text((cx_start, top_y), song_txt, fill=(248, 250, 252), font=font_song, anchor="lm")
+
+            # Artist + flag + album on middle line
+            mid_y = ry + 45
+            cc = t.get("country_code")
+            has_flag = show_flags and bool(cc) and cc != "XX"
+            flag_w, flag_h = 18, 13
+            max_meta_w = cx_end - cx_start
+            art_txt = _truncate_text(draw, t["artist_name"], font_artist, int(max_meta_w * 0.52))
+            draw.text((cx_start, mid_y), art_txt, fill=(203, 213, 225), font=font_artist, anchor="lm")
+            cur_x = cx_start + int(draw.textlength(art_txt, font=font_artist))
+            if has_flag:
+                fimg = get_flag_rgba(cc, flag_w, flag_h)
+                cur_x += 7
+                canvas.alpha_composite(fimg, dest=(cur_x, mid_y - flag_h // 2))
+                cur_x += flag_w
+            rem_w = cx_end - cur_x
+            if rem_w > 34 and (t.get("release_name") or "").strip():
+                rel_txt = _truncate_text(draw, f"  •  {t['release_name']}", font_artist, rem_w)
+                draw.text((cur_x, mid_y), rel_txt, fill=(148, 163, 184), font=font_artist, anchor="lm")
+
+            # Bottom sleek gradient bar + %
+            val = t["minutes_listened"] if is_min else t["play_count"]
+            ratio = val / max_val
+            pct_str = f"{max(1, int(round(ratio * 100)))}%"
+            pct_w = 38
+            bar_w = (cx_end - cx_start) - pct_w - 8
+            _draw_row_gradient_bar(
+                canvas,
+                cx_start,
+                ry + 62,
+                bar_w,
+                7,
+                ratio,
+                accent_rgb=(124, 58, 237) if is_top10 else (99, 102, 241),
+                tip_rgb=(56, 189, 248) if is_top10 else (96, 165, 250),
+            )
+            draw.text((cx_end, ry + 65), pct_str, fill=(148, 163, 184), font=font_pct, anchor="rm")
+
+        if two_col and (len(rest_items) % 2 == 1):
+            sx = padding + (col_w + col_gap)
+            sy = list_y + (left_count - 1) * (row_h + row_gap)
+            _draw_glass_card(
+                canvas,
+                (sx, sy, sx + col_w, sy + row_h),
+                radius=12,
+                fill_rgba=(15, 23, 42, 195),
+                border_rgba=(139, 92, 246, 70),
+            )
+            sum_lbl = f"TOP {len(tracks)} SUMMARY"
+            sum_vals = f"{total_mins_shown:,.0f} mins ({total_mins_shown / 60.0:.1f}h)  •  {total_plays_shown:,} listens"
+            draw.text((sx + 20, sy + row_h // 2), sum_lbl, fill=(167, 139, 250), font=font_podium_pct, anchor="lm")
+            draw.text((sx + col_w - 20, sy + row_h // 2), sum_vals, fill=(203, 213, 225), font=font_sub_row, anchor="rm")
 
     if formats is not None:
         return save_canvas_formats(canvas, output_path, formats, quality=92)
@@ -1088,7 +1677,7 @@ def generate_world_map_image(
     rank_by: str = "metric",
     top_x: int = 5,
     show_pie: bool = False,
-    show_flags: bool = True,
+    show_flags: bool = False,
     timeframe: Optional[str] = None,
     start_ts: Optional[int] = None,
     end_ts: Optional[int] = None,
@@ -1111,7 +1700,7 @@ def generate_world_map_image(
     canvas_w = 1600
     padding = 36
     inner_w = canvas_w - padding * 2
-    header_h = 104
+    header_h = 122
 
     map_card_h = 796
     map_w = inner_w - 28
@@ -1121,15 +1710,19 @@ def generate_world_map_image(
     table_rows = countries[:actual_top_x]
 
     # Build Pie data if enabled
+    is_artist_pie = rank_by == "artists"
     pie_segments: List[Dict[str, Any]] = []
     pie_total = 1.0
     if show_pie:
         pie_count = min(12, len(countries)) if top_x >= 999 else actual_top_x
         top_slice = countries[:pie_count]
         rest_slice = countries[pie_count:]
-        pie_total = sum((c["minutes_listened"] if is_min else c["play_count"]) for c in countries) or 1.0
+        pie_total = sum(
+            (c["artist_count"] if is_artist_pie else (c["minutes_listened"] if is_min else c["play_count"]))
+            for c in countries
+        ) or 1.0
         for idx, c in enumerate(top_slice):
-            val = c["minutes_listened"] if is_min else c["play_count"]
+            val = c["artist_count"] if is_artist_pie else (c["minutes_listened"] if is_min else c["play_count"])
             pie_segments.append({
                 "label": c["country_name"],
                 "code": c["country_code"],
@@ -1137,7 +1730,10 @@ def generate_world_map_image(
                 "pct": (val / pie_total) * 100.0,
                 "color": PIE_COLORS_HEX[idx % len(PIE_COLORS_HEX)],
             })
-        rest_val = sum((c["minutes_listened"] if is_min else c["play_count"]) for c in rest_slice)
+        rest_val = sum(
+            (c["artist_count"] if is_artist_pie else (c["minutes_listened"] if is_min else c["play_count"]))
+            for c in rest_slice
+        )
         if rest_val > 0:
             pie_segments.append({
                 "label": f"Other ({len(rest_slice)} countries)",
@@ -1154,12 +1750,9 @@ def generate_world_map_image(
     insights_h = max(table_card_h, pie_card_h)
 
     canvas_h = padding + header_h + map_card_h + 24 + insights_h + padding
-    canvas = Image.new("RGB", (canvas_w, canvas_h), color=(9, 13, 22))
+    canvas = _build_ambient_poster_canvas(canvas_w, canvas_h, [(56, 189, 248), (59, 130, 246), (139, 92, 246)])
     draw = ImageDraw.Draw(canvas)
 
-    font_tag = get_font(FONT_BOLD, 13)
-    font_title = get_font(FONT_BOLD, 34)
-    font_sub = get_font(FONT_REGULAR, 16)
     font_h3 = get_font(FONT_BOLD, 20)
     font_th = get_font(FONT_BOLD, 12)
     font_cell = get_font(FONT_MEDIUM, 15)
@@ -1168,22 +1761,19 @@ def generate_world_map_image(
     font_small = get_font(FONT_REGULAR, 13)
     font_legend = get_font(FONT_MONO, 12)
 
-    # Header
-    draw.rounded_rectangle([(padding, padding), (padding + 188, padding + 24)], radius=4, fill=(29, 78, 216))
-    draw.text((padding + 94, padding + 12), "MUSICBRAINZ WRAPPED", fill=(255, 255, 255), font=font_tag, anchor="mm")
-    draw.text((padding, padding + 32), "WORLD MAP OF LISTENING ORIGINS", fill=(248, 250, 252), font=font_title)
     metric_label = "Listen Time" if is_min else "No. of Listens"
     rank_label = "Artist Count" if rank_by == "artists" else metric_label
     time_label = _format_timeframe_label(timeframe, start_ts, end_ts)
-    draw.text(
-        (padding, padding + 74),
-        f"Colored by {rank_label}  •  Ranked by {metric_label}  •  Timeframe: {time_label}  •  {len(countries)} Countries  •  Unofficial",
-        fill=(148, 163, 184),
-        font=font_sub,
+    map_card_y = _draw_poster_header(
+        canvas,
+        draw,
+        padding=padding,
+        canvas_w=canvas_w,
+        title="WORLD MAP OF LISTENING ORIGINS",
+        subtitle=f"Colored by {rank_label}  •  Ranked by {metric_label}  •  Timeframe: {time_label}",
+        accent_rgb=(56, 189, 248),
+        meta_pill=f"{len(countries)} Countries",
     )
-
-    # Map Card
-    map_card_y = padding + header_h
     draw.rounded_rectangle(
         [(padding, map_card_y), (padding + inner_w, map_card_y + map_card_h)],
         radius=16,
@@ -1253,13 +1843,13 @@ def generate_world_map_image(
     draw.text((padding + table_w - 77, grid_y + 31), metric_label, fill=(255, 255, 255), font=font_small, anchor="mm")
 
     # Table column positions
-    col_rank_x = padding + 24
-    col_country_x = padding + 68
-    col_time_x = padding + (430 if show_pie else 570)
-    col_plays_x = padding + (535 if show_pie else 715)
-    col_art_x = padding + (615 if show_pie else 835)
-    col_share_x = padding + (755 if show_pie else 1070)
-    col_lead_x = padding + (780 if show_pie else 1105)
+    col_rank_x = padding + 22
+    col_country_x = padding + 62
+    col_time_x = padding + (408 if show_pie else 570)
+    col_plays_x = padding + (492 if show_pie else 715)
+    col_art_x = padding + (562 if show_pie else 835)
+    col_share_x = padding + (706 if show_pie else 1070)
+    col_lead_x = padding + (730 if show_pie else 1105)
 
     th_y = grid_y + 68
     draw.line([(padding + 18, th_y + 14), (padding + table_w - 18, th_y + 14)], fill=(42, 55, 82), width=1)
@@ -1293,8 +1883,8 @@ def generate_world_map_image(
         draw.text((col_art_x, cy), f"{c['artist_count']:,}", fill=(203, 213, 225), font=font_mono, anchor="rm")
 
         share_color = _hex_to_rgb(PIE_COLORS_HEX[idx % len(PIE_COLORS_HEX)])
-        bar_w = 56 if show_pie else 90
-        bar_x = col_share_x - bar_w - 54
+        bar_w = 50 if show_pie else 90
+        bar_x = col_share_x - bar_w
         draw.text((bar_x - 8, cy), f"{c['share_pct']}%", fill=(248, 250, 252), font=font_mono, anchor="rm")
         draw.rounded_rectangle([(bar_x, cy - 4), (bar_x + bar_w, cy + 4)], radius=4, fill=(30, 41, 59))
         fill_px = max(4, int(bar_w * min(100.0, c["share_pct"]) / 100.0)) if c["share_pct"] > 0 else 0
@@ -1353,12 +1943,20 @@ def generate_world_map_image(
         pie_cy = grid_y + 185
         if pie_img is not None:
             canvas.paste(pie_img, (pie_cx - 120, pie_cy - 120), pie_img)
-        center_txt = f"{round(pie_total / 60):,}h" if is_min else f"{int(pie_total):,}"
-        center_sub = "attributed" if is_min else "listens"
+        if is_artist_pie:
+            center_txt = f"{int(pie_total):,}"
+            center_sub = "artists"
+        elif is_min:
+            center_txt = f"{round(pie_total / 60):,}h"
+            center_sub = "attributed"
+        else:
+            center_txt = f"{int(pie_total):,}"
+            center_sub = "listens"
         draw.text((pie_cx, pie_cy - 8), center_txt, fill=(248, 250, 252), font=font_h3, anchor="mm")
         draw.text((pie_cx, pie_cy + 14), center_sub, fill=(148, 163, 184), font=font_small, anchor="mm")
 
         leg_start_y = grid_y + 318
+        unit_suffix = "a" if is_artist_pie else ("m" if is_min else "p")
         for idx, seg in enumerate(pie_segments):
             ly = leg_start_y + idx * 34
             draw.rounded_rectangle([(pie_x + 20, ly), (pie_x + pie_w - 20, ly + 28)], radius=6, fill=(15, 23, 42))
@@ -1368,7 +1966,7 @@ def generate_world_map_image(
                 fimg = get_flag_rgba(seg["code"], 18, 13)
                 canvas.paste(fimg, (lx, ly + 7), fimg)
                 lx += 24
-            val_str = f"{seg['pct']:.1f}% ({seg['val']:,.0f}{'m' if is_min else 'p'})"
+            val_str = f"{seg['pct']:.1f}% ({seg['val']:,.0f}{unit_suffix})"
             vw = int(draw.textlength(val_str, font=font_legend))
             lbl_txt = _truncate_text(draw, seg["label"], font_small, (pie_x + pie_w - 38 - vw) - lx)
             draw.text((lx, ly + 14), lbl_txt, fill=(226, 232, 240), font=font_small, anchor="lm")
@@ -1411,21 +2009,18 @@ def generate_release_years_image(
     canvas_w = 1600
     padding = 36
     inner_w = canvas_w - padding * 2
-    header_h = 104
+    header_h = 122
     kpi_h = 92
     chart_card_h = 490
     top_rows = (len(top_years) + 1) // 2
     highlights_h = 68 + top_rows * 88 + 14
 
     canvas_h = padding + header_h + kpi_h + 20 + chart_card_h + 22 + highlights_h + padding
-    canvas = Image.new("RGB", (canvas_w, canvas_h), color=(9, 13, 22))
+    canvas = _build_ambient_poster_canvas(canvas_w, canvas_h, [(6, 182, 212), (99, 102, 241), (245, 158, 11)])
     draw = ImageDraw.Draw(canvas)
 
-    font_tag = get_font(FONT_BOLD, 13)
-    font_title = get_font(FONT_BOLD, 34)
-    font_sub = get_font(FONT_REGULAR, 16)
     font_kpi_lbl = get_font(FONT_BOLD, 11)
-    font_kpi_val = get_font(FONT_BOLD, 22)
+    font_kpi_val = get_font(FONT_BOLD, 21)
     font_h3 = get_font(FONT_BOLD, 20)
     font_legend = get_font(FONT_MEDIUM, 13)
     font_bar_val = get_font(FONT_MONO, 10)
@@ -1434,43 +2029,43 @@ def generate_release_years_image(
     font_card_sub = get_font(FONT_REGULAR, 13)
     font_mono = get_font(FONT_MONO, 14)
 
-    # Header
-    draw.rounded_rectangle([(padding, padding), (padding + 188, padding + 24)], radius=4, fill=(29, 78, 216))
-    draw.text((padding + 94, padding + 12), "MUSICBRAINZ WRAPPED", fill=(255, 255, 255), font=font_tag, anchor="mm")
-    draw.text((padding, padding + 32), "RELEASE YEARS DISTRIBUTION (UNBINNED)", fill=(248, 250, 252), font=font_title)
     metric_label = "Listen Time" if is_min else "No. of Listens"
     mode_label = "Active Years" if mode == "active" else "Full Continuous Timeline"
     time_label = _format_timeframe_label(timeframe, start_ts, end_ts)
-    draw.text(
-        (padding, padding + 74),
-        f"Metric: {metric_label}  •  View: {mode_label}  •  Timeframe: {time_label}  •  Unofficial",
-        fill=(148, 163, 184),
-        font=font_sub,
+    kpi_y = _draw_poster_header(
+        canvas,
+        draw,
+        padding=padding,
+        canvas_w=canvas_w,
+        title="RELEASE YEARS DISTRIBUTION (UNBINNED)",
+        subtitle=f"Metric: {metric_label}  •  View: {mode_label}  •  Timeframe: {time_label}",
+        accent_rgb=(6, 182, 212),
     )
 
-    # 5-card KPI Strip
-    kpi_y = padding + header_h
-    kpi_gap = 14
-    kpi_w = (inner_w - kpi_gap * 4) // 5
+    # 6-card KPI Strip (including Listening Age)
+    kpi_gap = 12
+    kpi_w = (inner_w - kpi_gap * 5) // 6
     peak_val_str = f"{summary['peak_minutes']:,.0f}m" if is_min else f"{summary['peak_plays']:,}p"
     kpis = [
-        ("PEAK YEAR", f"{summary.get('peak_year')} ({peak_val_str})" if summary.get("peak_year") else "--"),
-        ("WEIGHTED AVG YEAR", f"{summary['weighted_avg_year']}" if summary.get("weighted_avg_year") else "--"),
-        ("RELEASE SPAN", f"{summary['earliest_year']} – {summary['latest_year']}" if summary.get("earliest_year") else "--"),
-        ("ACTIVE YEARS", f"{summary.get('active_years_count', 0)} years"),
-        ("METADATA COVERAGE", f"{summary.get('coverage_pct', 0)}%"),
+        ("PEAK YEAR", f"{summary.get('peak_year')} ({peak_val_str})" if summary.get("peak_year") else "--", False),
+        ("WEIGHTED AVG YEAR", f"{summary['weighted_avg_year']}" if summary.get("weighted_avg_year") else "--", False),
+        ("LISTENING AGE", f"{summary['listening_age']} yrs" if summary.get("listening_age") else "--", True),
+        ("RELEASE SPAN", f"{summary['earliest_year']} – {summary['latest_year']}" if summary.get("earliest_year") else "--", False),
+        ("ACTIVE YEARS", f"{summary.get('active_years_count', 0)} years", False),
+        ("METADATA COVERAGE", f"{summary.get('coverage_pct', 0)}%", False),
     ]
-    for idx, (lbl, val_txt) in enumerate(kpis):
+    for idx, (lbl, val_txt, is_accent) in enumerate(kpis):
         kx = padding + idx * (kpi_w + kpi_gap)
-        draw.rounded_rectangle(
-            [(kx, kpi_y), (kx + kpi_w, kpi_y + kpi_h)],
+        _draw_glass_card(
+            canvas,
+            (kx, kpi_y, kx + kpi_w, kpi_y + kpi_h),
             radius=12,
-            fill=(19, 28, 46),
-            outline=(42, 55, 82),
-            width=1,
+            fill_rgba=(22, 34, 58, 230) if is_accent else (19, 28, 46, 215),
+            border_rgba=(56, 189, 248, 130) if is_accent else (42, 55, 82, 190),
+            top_accent_rgb=(56, 189, 248) if is_accent else None,
         )
-        draw.text((kx + 18, kpi_y + 24), lbl, fill=(148, 163, 184), font=font_kpi_lbl, anchor="lm")
-        draw.text((kx + 18, kpi_y + 58), val_txt, fill=(248, 250, 252), font=font_kpi_val, anchor="lm")
+        draw.text((kx + 16, kpi_y + 24), lbl, fill=(125, 211, 252) if is_accent else (148, 163, 184), font=font_kpi_lbl, anchor="lm")
+        draw.text((kx + 16, kpi_y + 58), val_txt, fill=(248, 250, 252), font=font_kpi_val, anchor="lm")
 
     # Chart Card
     chart_y = kpi_y + kpi_h + 20
@@ -1612,7 +2207,8 @@ def export_all_visuals(
     timeframe: Optional[str] = None,
     metric: str = "minutes",
     formats: Optional[Sequence[str]] = None,
-    show_flags: bool = True,
+    show_flags: bool = False,
+    show_pie: bool = False,
     db_path: str = DB_PATH,
 ) -> Dict[str, List[str]]:
     fmt_list = normalize_formats(formats)
@@ -1649,6 +2245,7 @@ def export_all_visuals(
         metric=metric,
         timeframe=timeframe,
         output_path=os.path.join(STATIC_DIR, "world_map"),
+        show_pie=show_pie,
         show_flags=show_flags,
         formats=fmt_list,
         db_path=db_path,
